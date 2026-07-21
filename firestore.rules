@@ -1,0 +1,88 @@
+rules_version = '2';
+
+// Woerterkarten — hardened Firestore Security Rules.
+// Fixes F1 (open rules), F3 (client role), F6 (IDOR), F9 (integrity fields),
+//       F12 (account overwrite).  Deploy: firebase deploy --only firestore:rules
+//
+//   - Identity comes ONLY from Firebase Authentication (request.auth.uid).
+//   - Roles come ONLY from the custom claim request.auth.token.teacher, set by
+//     the claim-teacher function. Clients cannot grant it.
+//   - Per-user data lives under users/{uid}/** and is private to that uid.
+//   - Shared course content (global_*) is readable by any signed-in user and
+//     writable only by teachers.
+//   - The legacy plaintext-ish "accounts" collection is denied (delete it after
+//     migration).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn()    { return request.auth != null; }
+    function isOwner(uid)    { return isSignedIn() && request.auth.uid == uid; }
+    function isTeacher()     { return isSignedIn() && request.auth.token.teacher == true; }
+    function isStr(v, n)     { return v is string && v.size() <= n; }
+    function isCloudinary(v) { return v == null || (v is string && v.matches('https://res\\.cloudinary\\.com/[^ ]+')); }
+    function articleOk(v)    { return v in ['', 'der', 'die', 'das', 'ein', 'eine']; }
+
+    function validWord(source) {
+      let d = request.resource.data;
+      return isStr(d.de, 100) && d.de.size() > 0
+          && isStr(d.ru, 200) && d.ru.size() > 0
+          && articleOk(d.article)
+          && isStr(d.example, 300)
+          && (d.folderId == null || isStr(d.folderId, 64))
+          && isCloudinary(d.imageUrl)
+          && d.source == source
+          && isStr(d.addedBy, 64);
+    }
+
+    function validFolder(source) {
+      let d = request.resource.data;
+      return isStr(d.name, 60) && d.name.size() > 0
+          && isStr(d.icon, 8)
+          && d.source == source;
+    }
+
+    // ---- Per-user private area -------------------------------------------
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+                            && request.resource.data.keys().hasOnly(['username', 'lang', 'createdAt'])
+                            && isStr(request.resource.data.username, 32)
+                            && isStr(request.resource.data.lang, 5);
+      allow delete: if false;
+
+      match /words/{wordId} {
+        allow read:           if isOwner(uid);
+        allow create, update: if isOwner(uid) && validWord('personal')
+                              && request.resource.data.addedBy == uid;
+        allow delete:         if isOwner(uid);
+      }
+      match /folders/{folderId} {
+        allow read:           if isOwner(uid);
+        allow create, update: if isOwner(uid) && validFolder('personal');
+        allow delete:         if isOwner(uid);
+      }
+      match /meta/{docId} {
+        allow read, write:    if isOwner(uid);
+      }
+    }
+
+    // ---- Shared course content -------------------------------------------
+    match /global_words/{wordId} {
+      allow read:           if isSignedIn();
+      allow create, update: if isTeacher() && validWord('global');
+      allow delete:         if isTeacher();
+    }
+    match /global_folders/{folderId} {
+      allow read:           if isSignedIn();
+      allow create, update: if isTeacher() && validFolder('global');
+      allow delete:         if isTeacher();
+    }
+
+    // ---- Legacy: deny (delete this collection after migration) -----------
+    match /accounts/{doc} { allow read, write: if false; }
+
+    // Default deny.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

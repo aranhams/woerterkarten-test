@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────
+# Repo scoped to the Vercel deploy: frontend (Vite) + /api functions.
+# Everything listed here is kept OUT of git so only the files Vercel
+# needs are uploaded to GitHub. Tracked files end up being:
+#   package.json, package-lock.json, vite.config.js, index.html,
+#   src/, api/, vercel.json, firestore.rules, .env.example, .gitignore
+# ─────────────────────────────────────────────────────────────
+
+# Dependencies & build output (Vercel runs `npm install` + `vite build`)
+node_modules/
+dist/
+.vite/
+
+# Environment / secrets — never commit (set these in the Vercel dashboard)
+.env
+.env.*
+# keep only the placeholder template, as documentation of required vars
+!.env.example
+serviceAccount*.json
+firebase-adminsdk*.json
+*.pem
+*.key
+
+# Local dev & Docker — not used by Vercel
+Dockerfile
+.dockerignore
+docker-compose.yml
+DOCKER.md
+dev-api-server.mjs
+
+# Firebase local state (firestore.rules itself IS tracked — deployed via Firebase CLI)
+.firebase/
+emulator-data/
+firebase-debug.log
+firestore-debug.log
+
+# Security assessment artifacts (contain real hashes / findings — keep out of git)
+woerterkarten_accounts_dump.txt
+SECURITY_REVIEW_woerterkarten.txt
+SECURITY_PATCH_CHANGES.txt
+
+# Logs & OS/editor cruft
+*.log
+npm-debug.log*
+.DS_Store
+.idea/
+.vscode/
