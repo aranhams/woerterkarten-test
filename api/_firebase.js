@@ -8,6 +8,7 @@
 //                             (optional — same-origin needs nothing here)
 import { getApps, initializeApp, cert, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 
 function ensureApp() {
   if (!getApps().length) {
@@ -37,5 +38,8 @@ export function applyCors(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
+
+// Firestore handle for the serverless functions (shared translation cache, etc.).
+export function getDb() { ensureApp(); return getFirestore(); }
 
 export { getAuth };

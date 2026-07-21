@@ -52,16 +52,6 @@ service cloud.firestore {
       match /meta/{docId} {
         allow read, write:    if isOwner(uid);
       }
-      // Per-student auto-translations of shared/global words (feature: students
-      // study the class deck in their own language). Private to the owner uid.
-      match /translations/{wordId} {
-        allow read:           if isOwner(uid);
-        allow create, update: if isOwner(uid)
-                              && request.resource.data.keys().hasOnly(['ru', 'example'])
-                              && isStr(request.resource.data.ru, 200)
-                              && isStr(request.resource.data.example, 300);
-        allow delete:         if isOwner(uid);
-      }
     }
 
     // ---- Shared course content -------------------------------------------
@@ -74,6 +64,13 @@ service cloud.firestore {
       allow read:           if isSignedIn();
       allow create, update: if isTeacher() && validFolder('global');
       allow delete:         if isTeacher();
+    }
+    // Shared per-language translation cache for global words. Written ONLY by the
+    // /api/translate function (Admin SDK bypasses rules); clients read only, so a
+    // student can't poison a translation shown to the whole class.
+    match /global_translations/{lang}/words/{wordId} {
+      allow read:  if isSignedIn();
+      allow write: if false;
     }
 
     // ---- Server-only rate-limit / lockout state (Admin SDK bypasses rules) --

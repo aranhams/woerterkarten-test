@@ -7,7 +7,16 @@
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🃏</text></svg>" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Boot placeholder: React replaces #root on mount, so this disappears
+           automatically. Gives users immediate feedback instead of a blank
+           white page while the JS bundle downloads, parses and initializes. -->
+      <div style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font-family:system-ui,-apple-system,sans-serif;color:#555;">
+        <div style="width:38px;height:38px;border:4px solid #ddd;border-top-color:#4a6cf7;border-radius:50%;animation:wk-spin 0.8s linear infinite;"></div>
+        <div>Wörterkarten wird geladen…</div>
+      </div>
+      <style>@keyframes wk-spin{to{transform:rotate(360deg)}}</style>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

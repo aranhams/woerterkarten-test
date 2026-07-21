@@ -50,6 +50,13 @@ const ARTICLES = ["", "der", "die", "das", "ein", "eine"];
 const clip = (s, n) => String(s ?? "").slice(0, n);
 function cleanArticle(a) { a = String(a || "").trim().toLowerCase(); return ARTICLES.includes(a) ? a : ""; }
 function validImageUrl(u) { return u == null || /^https:\/\/res\.cloudinary\.com\/[^\s]+$/.test(u); }
+// Rewrite a stored Cloudinary secure_url into an optimized delivery URL:
+// f_auto (WebP/AVIF), q_auto (auto quality) and c_limit,w_<w> to cap the
+// delivered pixel size. Stored URLs have no transforms, so we insert once.
+function cldImg(u, w = 400) {
+  if (!u || !u.includes("/image/upload/") || /\/image\/upload\/[^/]*(?:f_auto|q_auto|w_\d)/.test(u)) return u;
+  return u.replace("/image/upload/", `/image/upload/f_auto,q_auto,c_limit,w_${w}/`);
+}
 
 // Deterministic, collision-free username -> email local part (base32 of UTF-8).
 // Guarantees a valid email and lets Firebase Auth enforce username uniqueness (F8).
@@ -330,7 +337,7 @@ async function loadGlobalWords() { return await dbGetAll("global_words"); }
 async function loadGlobalFolders() { return await dbGetAll("global_folders"); }
 async function loadUserWords(uid) { return await dbGetAll(`users/${uid}/words`); }
 async function loadUserFolders(uid) { return await dbGetAll(`users/${uid}/folders`); }
-async function loadUserTranslations(uid) { return await dbGetAll(`users/${uid}/translations`); }
+async function loadLangTranslations(lang) { return await dbGetAll(`global_translations/${lang}/words`); }
 async function loadProgress(uid) { const d = await dbGet(`users/${uid}/meta/progress`); return d?.data || {}; }
 async function saveProgress(uid, progress) { await dbSet(`users/${uid}/meta/progress`, { data: progress }); }
 
@@ -367,9 +374,10 @@ function LearnTab({ session }) {
 
   useEffect(() => {
     (async () => {
-      const [gw, uw, gf, uf, prog, ut] = await Promise.all([loadGlobalWords(), loadUserWords(session.uid), loadGlobalFolders(), loadUserFolders(session.uid), loadProgress(session.uid), loadUserTranslations(session.uid)]);
-      // Overlay THIS student's saved translations onto the shared (global) words,
-      // so each learner studies the class deck in their own native language.
+      const [gw, uw, gf, uf, prog, ut] = await Promise.all([loadGlobalWords(), loadUserWords(session.uid), loadGlobalFolders(), loadUserFolders(session.uid), loadProgress(session.uid), loadLangTranslations(session.lang)]);
+      // Overlay the shared per-language translation cache onto the global words,
+      // so every learner of this language reuses the same saved translations
+      // (one Anthropic call per word per language, not per student).
       const tmap = {};
       ut.forEach((t) => { tmap[t.id] = t; });
       const mergedGW = gw.map((w) => (tmap[w.id] ? { ...w, ru: tmap[w.id].ru, example: tmap[w.id].example || w.example } : w));
@@ -387,11 +395,12 @@ function LearnTab({ session }) {
   const learned = filteredWords.filter((w) => (progress[w.id]?.level || 0) >= 3).length;
   const card = dueCards[idx % Math.max(dueCards.length, 1)] || null;
 
-  // New feature: per-student auto-translation of shared/global words. When a
-  // global card has no translation for THIS student yet, fetch one via the
-  // authenticated, rate-limited /api/translate proxy and persist it under the
-  // student's own users/{uid}/translations/{wordId}. uid-keyed + token-auth +
-  // validated by firestore.rules — same security model as the rest of the app.
+  // Feature: shared per-language auto-translation of global words. When a global
+  // card isn't translated for this language yet, call the authenticated,
+  // rate-limited /api/translate proxy with the wordId. The SERVER checks/writes a
+  // shared cache at global_translations/{lang}/words/{wordId} (Admin SDK), so the
+  // first student of a language pays the tokens and everyone else gets a cache
+  // hit. The client never writes the cache (firestore.rules) — no poisoning.
   async function ensureTranslation(c) {
     if (!c || c.source !== "global" || translatedIds.has(c.id)) return;
     setTranslatedIds((s) => new Set(s).add(c.id)); // mark first so we call the API at most once per card
@@ -400,13 +409,12 @@ function LearnTab({ session }) {
       const res = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ word: c.de, article: c.article, lang: session.lang }),
+        body: JSON.stringify({ wordId: c.id, word: c.de, article: c.article, lang: session.lang }),
       });
       if (!res.ok) throw new Error("translate failed");
       const parsed = await res.json();
       if (parsed.translation) {
         const trans = { ru: clip(parsed.translation, LIMIT.ru), example: clip(parsed.example || c.example || "", LIMIT.example) };
-        await dbSet(`users/${session.uid}/translations/${c.id}`, trans);
         setAllWords((prev) => prev.map((w) => (w.id === c.id ? { ...w, ...trans } : w)));
       }
     } catch {
@@ -465,7 +473,7 @@ function LearnTab({ session }) {
         <div className="fc" onClick={() => !revealed && setRevealed(true)}>
           {cardFolder && <div className="fc-folder">{cardFolder.icon} {cardFolder.name}</div>}
           <div className="fc-lvl">{lvlEmoji(progress[card.id]?.level)}</div>
-          {card.imageUrl && validImageUrl(card.imageUrl) && <img src={card.imageUrl} className="fc-img" alt="" />}
+          {card.imageUrl && validImageUrl(card.imageUrl) && <img src={cldImg(card.imageUrl, 600)} className="fc-img" alt="" decoding="async" />}
           <div className="fc-hint">{front.hint}</div>
           {front.isDE && front.article && <div className="fc-article">{front.article}</div>}
           <div className="fc-word" style={front.isDE ? {} : { fontFamily: "'Inter',sans-serif", fontSize: 28 }}>{front.word}</div>
@@ -594,7 +602,7 @@ function WordsTab({ session }) {
         const isOwn = w.source === "personal";  // personal words come only from this uid's subcollection
         return (
           <div className="word-item" key={w.id}>
-            {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={w.imageUrl} className="wi-img" alt="" /> : <div className="wi-img-placeholder">🔤</div>}
+            {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
             <div className="wi-text">
               <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
               <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
@@ -681,7 +689,7 @@ function FoldersTab({ session }) {
           {words.length === 0 && <div className="empty" style={{ padding: 20 }}><p>Noch keine Wörter in diesem Ordner.</p></div>}
           {words.map((w) => (
             <div className="word-item" key={w.id}>
-              {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={w.imageUrl} className="wi-img" alt="" /> : <div className="wi-img-placeholder">🔤</div>}
+              {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
               <div className="wi-text">
                 <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
                 <div className="wi-ru">{w.ru}</div>
@@ -822,7 +830,7 @@ function ManageTab() {
         const folder = folders.find((f) => f.id === w.folderId);
         return (
           <div className="word-item" key={w.id}>
-            {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={w.imageUrl} className="wi-img" alt="" /> : <div className="wi-img-placeholder">🔤</div>}
+            {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
             <div className="wi-text">
               <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
               <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
