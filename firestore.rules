@@ -13,7 +13,7 @@ service cloud.firestore {
     function validWord(source) {
       let d = request.resource.data;
       return isStr(d.de, 100) && d.de.size() > 0
-          && isStr(d.ru, 200) && d.ru.size() > 0
+          && isStr(d.ru, 200) && (source == 'global' || d.ru.size() > 0)
           && articleOk(d.article)
           && isStr(d.example, 300)
           && (d.folderId == null || isStr(d.folderId, 64))

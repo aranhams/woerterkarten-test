@@ -716,7 +716,7 @@ function ManageTab() {
   function flash(m) { setMsg(m); setTimeout(() => setMsg(""), 2500); }
 
   async function addWord() {
-    if (!de.trim() || !ru.trim()) return;
+    if (!de.trim()) return; // translation optional for global words — students auto-translate to their own language
     if (imageUrl && !validImageUrl(imageUrl)) { flash("⚠ Ungültige Bild-URL."); return; }
     const id = `g_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const w = { de: clip(de.trim(), LIMIT.de), article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global" };
@@ -729,8 +729,8 @@ function ManageTab() {
     const newW = [];
     for (const line of lines) {
       const parts = line.split(/[–\-—|]/).map((s) => s.trim());
-      if (parts.length < 2) continue;
-      let de_ = parts[0], art_ = "", ru_ = parts[1], ex_ = parts[2] || "";
+      if (!parts[0]) continue; // translation optional — a bare German word is allowed (auto-translated later)
+      let de_ = parts[0], art_ = "", ru_ = parts[1] || "", ex_ = parts[2] || "";
       const m = de_.match(/^(der|die|das|ein|eine)\s+(.+)$/i);
       if (m) { art_ = m[1]; de_ = m[2]; }
       newW.push({ de: clip(de_, LIMIT.de), article: cleanArticle(art_), ru: clip(ru_, LIMIT.ru), example: clip(ex_, LIMIT.example), folderId: folderId || null, imageUrl: null, addedBy: "Lehrerin", source: "global" });
@@ -782,7 +782,7 @@ function ManageTab() {
       <div className="form-row">
         <input className="in-sm" placeholder="der/die/das" value={article} onChange={(e) => setArticle(e.target.value)} />
         <input placeholder="Deutsches Wort" value={de} maxLength={LIMIT.de} onChange={(e) => setDe(e.target.value)} />
-        <input placeholder="Übersetzung" value={ru} maxLength={LIMIT.ru} onChange={(e) => setRu(e.target.value)} />
+        <input placeholder="Übersetzung (optional — Schüler übersetzen selbst)" value={ru} maxLength={LIMIT.ru} onChange={(e) => setRu(e.target.value)} />
       </div>
       <div className="form-row">
         <input placeholder="Beispielsatz (optional)" value={example} maxLength={LIMIT.example} onChange={(e) => setExample(e.target.value)} />
@@ -793,7 +793,7 @@ function ManageTab() {
       </div>
       <div className="form-row" style={{ alignItems: "flex-end" }}>
         <ImageUpload value={imageUrl} onChange={setImageUrl} small />
-        <button className="btn-add" onClick={addWord} disabled={!de.trim() || !ru.trim()} style={{ alignSelf: "flex-end" }}>+</button>
+        <button className="btn-add" onClick={addWord} disabled={!de.trim()} style={{ alignSelf: "flex-end" }}>+</button>
       </div>
       {msg && <p className="ok">{msg}</p>}
     </div>
