@@ -11,6 +11,7 @@
 //     can't break parsing.
 // The ANTHROPIC_KEY still stays server-side (unchanged — that part was fine).
 import { verifyBearer, applyCors } from "./_firebase.js";
+import { rateLimit } from "./_ratelimit.js";
 
 const LANG_NAMES = {
   RU: "Russisch", UK: "Ukrainisch", TR: "Türkisch", AR: "Arabisch",
@@ -19,16 +20,8 @@ const LANG_NAMES = {
   IT: "Italienisch", PT: "Portugiesisch", JA: "Japanisch",
 };
 
-// Best-effort in-memory limiter (per serverless instance). For hard guarantees
-// use a shared store (Upstash/Redis) or Firebase App Check.
-const bucket = new Map();
-function limited(uid, max = 30, windowMs = 60000) {
-  const now = Date.now();
-  const r = bucket.get(uid) || { n: 0, t: now };
-  if (now - r.t > windowMs) { r.n = 0; r.t = now; }
-  r.n += 1; bucket.set(uid, r);
-  return r.n > max;
-}
+// Rate limiting uses the shared Firestore-backed limiter (see _ratelimit.js) so
+// it holds across Vercel's concurrent / recycled serverless instances.
 
 export default async function handler(req, res) {
   // ---- Diagnostics -------------------------------------------------------
@@ -54,8 +47,10 @@ export default async function handler(req, res) {
     log(`401 unauthorized — bearer token ${req.headers.authorization ? "present but invalid/expired" : "missing"}`);
     return res.status(401).json({ error: "Unauthorized" });
   }
-  if (limited(user.uid)) {
+  const rl = await rateLimit(`translate:${user.uid}`, { max: 30, windowMs: 60_000 });
+  if (rl.limited) {
     log(`429 rate-limited uid=${user.uid}`);
+    res.setHeader("Retry-After", String(rl.retryAfterSec));
     return res.status(429).json({ error: "Too many requests" });
   }
 

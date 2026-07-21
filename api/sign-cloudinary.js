@@ -6,15 +6,7 @@
 // Env: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
 import crypto from "crypto";
 import { verifyBearer, applyCors } from "./_firebase.js";
-
-const hits = new Map();
-function rateLimited(uid, max = 20, windowMs = 60000) {
-  const now = Date.now();
-  const r = hits.get(uid) || { n: 0, t: now };
-  if (now - r.t > windowMs) { r.n = 0; r.t = now; }
-  r.n += 1; hits.set(uid, r);
-  return r.n > max;
-}
+import { rateLimit } from "./_ratelimit.js";
 
 export default async function handler(req, res) {
   applyCors(req, res);
@@ -23,7 +15,12 @@ export default async function handler(req, res) {
 
   const user = await verifyBearer(req);
   if (!user) return res.status(401).json({ error: "Unauthorized" });
-  if (rateLimited(user.uid)) return res.status(429).json({ error: "Too many uploads" });
+
+  const rl = await rateLimit(`cloud:${user.uid}`, { max: 20, windowMs: 60_000 });
+  if (rl.limited) {
+    res.setHeader("Retry-After", String(rl.retryAfterSec));
+    return res.status(429).json({ error: "Too many uploads" });
+  }
 
   if (!process.env.CLOUDINARY_API_SECRET || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_CLOUD_NAME) {
     return res.status(500).json({ error: "Server misconfigured" });

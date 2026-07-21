@@ -52,16 +52,6 @@ service cloud.firestore {
       match /meta/{docId} {
         allow read, write:    if isOwner(uid);
       }
-      // Per-student auto-translations of shared/global words (feature: students
-      // study the class deck in their own language). Private to the owner uid.
-      match /translations/{wordId} {
-        allow read:           if isOwner(uid);
-        allow create, update: if isOwner(uid)
-                              && request.resource.data.keys().hasOnly(['ru', 'example'])
-                              && isStr(request.resource.data.ru, 200)
-                              && isStr(request.resource.data.example, 300);
-        allow delete:         if isOwner(uid);
-      }
     }
 
     // ---- Shared course content -------------------------------------------
@@ -75,9 +65,6 @@ service cloud.firestore {
       allow create, update: if isTeacher() && validFolder('global');
       allow delete:         if isTeacher();
     }
-
-    // ---- Server-only rate-limit / lockout state (Admin SDK bypasses rules) --
-    match /rate_limits/{doc} { allow read, write: if false; }
 
     // ---- Legacy: deny (delete this collection after migration) -----------
     match /accounts/{doc} { allow read, write: if false; }

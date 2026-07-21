@@ -330,6 +330,7 @@ async function loadGlobalWords() { return await dbGetAll("global_words"); }
 async function loadGlobalFolders() { return await dbGetAll("global_folders"); }
 async function loadUserWords(uid) { return await dbGetAll(`users/${uid}/words`); }
 async function loadUserFolders(uid) { return await dbGetAll(`users/${uid}/folders`); }
+async function loadUserTranslations(uid) { return await dbGetAll(`users/${uid}/translations`); }
 async function loadProgress(uid) { const d = await dbGet(`users/${uid}/meta/progress`); return d?.data || {}; }
 async function saveProgress(uid, progress) { await dbSet(`users/${uid}/meta/progress`, { data: progress }); }
 
@@ -362,11 +363,18 @@ function LearnTab({ session }) {
   const [folders, setFolders] = useState([]);
   const [progress, setProgress] = useState({});
   const [loading, setLoading] = useState(true);
+  const [translatedIds, setTranslatedIds] = useState(() => new Set());
 
   useEffect(() => {
     (async () => {
-      const [gw, uw, gf, uf, prog] = await Promise.all([loadGlobalWords(), loadUserWords(session.uid), loadGlobalFolders(), loadUserFolders(session.uid), loadProgress(session.uid)]);
-      setAllWords([...gw, ...uw]);
+      const [gw, uw, gf, uf, prog, ut] = await Promise.all([loadGlobalWords(), loadUserWords(session.uid), loadGlobalFolders(), loadUserFolders(session.uid), loadProgress(session.uid), loadUserTranslations(session.uid)]);
+      // Overlay THIS student's saved translations onto the shared (global) words,
+      // so each learner studies the class deck in their own native language.
+      const tmap = {};
+      ut.forEach((t) => { tmap[t.id] = t; });
+      const mergedGW = gw.map((w) => (tmap[w.id] ? { ...w, ru: tmap[w.id].ru, example: tmap[w.id].example || w.example } : w));
+      setAllWords([...mergedGW, ...uw]);
+      setTranslatedIds(new Set(Object.keys(tmap)));
       setFolders([...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))]);
       setProgress(prog); setLoading(false);
     })();
@@ -379,6 +387,35 @@ function LearnTab({ session }) {
   const learned = filteredWords.filter((w) => (progress[w.id]?.level || 0) >= 3).length;
   const card = dueCards[idx % Math.max(dueCards.length, 1)] || null;
 
+  // New feature: per-student auto-translation of shared/global words. When a
+  // global card has no translation for THIS student yet, fetch one via the
+  // authenticated, rate-limited /api/translate proxy and persist it under the
+  // student's own users/{uid}/translations/{wordId}. uid-keyed + token-auth +
+  // validated by firestore.rules — same security model as the rest of the app.
+  async function ensureTranslation(c) {
+    if (!c || c.source !== "global" || translatedIds.has(c.id)) return;
+    setTranslatedIds((s) => new Set(s).add(c.id)); // mark first so we call the API at most once per card
+    try {
+      const token = await idToken();
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ word: c.de, article: c.article, lang: session.lang }),
+      });
+      if (!res.ok) throw new Error("translate failed");
+      const parsed = await res.json();
+      if (parsed.translation) {
+        const trans = { ru: clip(parsed.translation, LIMIT.ru), example: clip(parsed.example || c.example || "", LIMIT.example) };
+        await dbSet(`users/${session.uid}/translations/${c.id}`, trans);
+        setAllWords((prev) => prev.map((w) => (w.id === c.id ? { ...w, ...trans } : w)));
+      }
+    } catch {
+      setTranslatedIds((s) => { const n = new Set(s); n.delete(c.id); return n; }); // allow a retry on failure
+    }
+  }
+
+  useEffect(() => { if (card) ensureTranslation(card); }, [card?.id]);
+
   async function answer(knew) {
     if (!card) return;
     const p = progress[card.id] || { level: 0 };
@@ -390,7 +427,7 @@ function LearnTab({ session }) {
   }
 
   const langLabel = LANGUAGES.find((l) => l.code === session.lang)?.label?.split(" ")[0] || "Muttersprache";
-  const front = card ? (direction === "de2ru" ? { hint: "Deutsch → ?", article: card.article, word: card.de, isDE: true } : { hint: `${langLabel} → ?`, word: card.ru, isDE: false }) : null;
+  const front = card ? (direction === "de2ru" ? { hint: "Deutsch → ?", article: card.article, word: card.de, isDE: true } : { hint: `${langLabel} → ?`, word: card.ru || "…", isDE: false }) : null;
   const back = card ? (direction === "de2ru" ? { word: card.ru, isDE: false } : { article: card.article, word: card.de, isDE: true }) : null;
   const cardFolder = card ? folders.find((f) => f.id === card.folderId) : null;
 
@@ -434,7 +471,7 @@ function LearnTab({ session }) {
           <div className="fc-word" style={front.isDE ? {} : { fontFamily: "'Inter',sans-serif", fontSize: 28 }}>{front.word}</div>
           {revealed ? (<>
             {back.isDE && back.article && <div className="fc-article" style={{ marginTop: 10 }}>{back.article}</div>}
-            <div className={back.isDE ? "fc-word" : "fc-ru"} style={back.isDE ? { marginTop: 6, fontSize: 28 } : {}}>{back.word}</div>
+            <div className={back.isDE ? "fc-word" : "fc-ru"} style={back.isDE ? { marginTop: 6, fontSize: 28 } : {}}>{back.word || <span style={{ color: "#ccc", fontSize: 14 }}>⏳ Wird übersetzt…</span>}</div>
             {card.example && <div className="fc-example">„{card.example}"</div>}
           </>) : <div className="fc-tap">Tippe, um {direction === "de2ru" ? "die Übersetzung" : "das deutsche Wort"} zu sehen</div>}
         </div>
