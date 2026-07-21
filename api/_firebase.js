@@ -6,9 +6,9 @@
 //   FIREBASE_SERVICE_ACCOUNT  JSON of a service-account key (or use ADC)
 //   APP_ORIGIN                comma-separated allowed origins for CORS
 //                             (optional — same-origin needs nothing here)
-import { getApps, initializeApp, cert, applicationDefault } from "firebase-admin/app";
+import { getApps, getApp, initializeApp, cert, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, initializeFirestore } from "firebase-admin/firestore";
 
 function ensureApp() {
   if (!getApps().length) {
@@ -40,6 +40,17 @@ export function applyCors(req, res) {
 }
 
 // Firestore handle for the serverless functions (shared translation cache, etc.).
-export function getDb() { ensureApp(); return getFirestore(); }
+// preferRest avoids the gRPC channel warm-up that dominates cold-start latency
+// for the handful of doc reads/writes these functions do on Vercel. Cached so
+// initializeFirestore runs at most once per instance.
+let _db = null;
+export function getDb() {
+  ensureApp();
+  if (!_db) {
+    try { _db = initializeFirestore(getApp(), { preferRest: true }); }
+    catch { _db = getFirestore(); } // already initialized on this app
+  }
+  return _db;
+}
 
 export { getAuth };

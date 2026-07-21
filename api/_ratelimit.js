@@ -14,16 +14,10 @@
 // State lives in the `rate_limits` collection. It is denied to all clients in
 // firestore.rules (the Admin SDK bypasses rules). Add a Firestore TTL policy on
 // the `expireAt` field to auto-purge stale counters.
-import { getApps, initializeApp, cert, applicationDefault } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getDb } from "./_firebase.js";
 
-function db() {
-  if (!getApps().length) {
-    const svc = process.env.FIREBASE_SERVICE_ACCOUNT;
-    initializeApp(svc ? { credential: cert(JSON.parse(svc)) } : { credential: applicationDefault() });
-  }
-  return getFirestore();
-}
+// All Firestore access goes through the shared getDb() (preferRest + single init).
+function db() { return getDb(); }
 
 const col = () => db().collection("rate_limits");
 
