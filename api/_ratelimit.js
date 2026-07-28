@@ -1,4 +1,5 @@
 import { getDb } from "./_firebase.js";
+import { logEvent } from "./_log.js";
 
 function db() { return getDb(); }
 
@@ -24,7 +25,7 @@ export async function rateLimit(key, { max = 30, windowMs = 60_000 } = {}) {
       return { limited: count > max, remaining: Math.max(0, max - count), retryAfterSec };
     });
   } catch (e) {
-    console.error(`[ratelimit] rl_${key} failed, allowing: ${e?.message}`);
+    logEvent("alert", "ratelimit.degraded", { fn: "rateLimit", key, err: e?.message });
     return { limited: false, remaining: max, retryAfterSec: 0, degraded: true };
   }
 }
@@ -44,7 +45,7 @@ export async function checkLock(keys, { max = 5, windowMs = 15 * 60_000 } = {}) 
     }
     return worst > 0 ? { blocked: true, retryAfterSec: Math.max(1, worst) } : { blocked: false };
   } catch (e) {
-    console.error(`[ratelimit] checkLock failed, allowing: ${e?.message}`);
+    logEvent("alert", "ratelimit.degraded", { fn: "checkLock", err: e?.message });
     return { blocked: false, degraded: true };
   }
 }
@@ -60,7 +61,7 @@ export async function registerFailure(keys, { windowMs = 15 * 60_000 } = {}) {
       if (now - windowStart >= windowMs) { fails = 0; windowStart = now; }
       fails += 1;
       tx.set(ref, { fails, windowStart, expireAt: new Date(windowStart + windowMs) }, { merge: true });
-    }).catch((e) => console.error(`[ratelimit] registerFailure lock_${k}: ${e?.message}`));
+    }).catch((e) => logEvent("error", "ratelimit.register_failed", { key: k, err: e?.message }));
   }));
 }
 

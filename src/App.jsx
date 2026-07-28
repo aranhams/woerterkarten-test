@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import {
   initializeFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc, serverTimestamp,
@@ -96,6 +96,14 @@ const css = `
   .brand h1{font-size:21px;letter-spacing:-0.5px;} .brand span{font-size:12px;color:var(--sage);font-style:italic;font-family:'Lora',serif;}
   .user-pill{display:flex;align-items:center;gap:8px;background:var(--sage-pale);border-radius:99px;padding:6px 14px 6px 10px;cursor:pointer;border:none;font-size:13px;color:var(--sage);font-family:inherit;transition:background .15s;}
   .user-pill:hover{background:#d4e4da;} .dot{width:8px;height:8px;border-radius:50%;background:var(--sage);}
+  .user-menu{position:relative;}
+  .user-caret{font-size:10px;color:var(--sage);transition:transform .15s;margin-left:2px;}
+  .user-menu-dropdown{position:absolute;top:calc(100% + 6px);right:0;z-index:50;min-width:190px;background:white;border:1.5px solid var(--ivory-dark);border-radius:10px;box-shadow:var(--shadow);padding:6px;}
+  .user-menu-head{padding:8px 10px 10px;border-bottom:1px solid var(--ivory-dark);margin-bottom:6px;}
+  .user-menu-name{font-weight:600;font-size:14px;color:var(--ink);}
+  .user-menu-sub{font-size:11px;color:var(--sage);margin-top:2px;}
+  .user-menu-item{display:flex;align-items:center;gap:8px;width:100%;padding:9px 10px;border:none;background:none;border-radius:7px;font-size:13px;color:var(--red-soft);cursor:pointer;font-family:inherit;text-align:left;transition:background .15s;}
+  .user-menu-item:hover{background:var(--red-pale);}
   .teacher-badge{background:var(--accent-pale);color:var(--accent);font-size:11px;padding:2px 8px;border-radius:99px;font-weight:600;}
   .auth-wrap{display:flex;flex-direction:column;align-items:center;padding:40px 0 24px;}
   .auth-wrap h2{font-size:26px;margin-bottom:6px;} .auth-wrap p{color:var(--ink-soft);font-size:14px;margin-bottom:28px;}
@@ -187,6 +195,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [tab, setTab] = useState("learn");
   const [loading, setLoading] = useState(true);
+  const [registering, setRegistering] = useState(false);
 
   useEffect(() => {
     return onAuthStateChanged(auth, async (user) => {
@@ -209,16 +218,12 @@ export default function App() {
   function logout() { signOut(auth); }
 
   if (loading) return <><style>{css}</style><div className="app"><div className="loading"><div className="spinner" /><br />Lädt…</div></div></>;
-  if (!session) return <><style>{css}</style><div className="app"><AuthScreen /></div></>;
+  if (!session || registering) return <><style>{css}</style><div className="app"><AuthScreen setRegistering={setRegistering} /></div></>;
 
   return (<><style>{css}</style><div className="app">
     <header className="header">
       <div className="brand"><h1>Wörterkarten</h1><span>Deutsch lernen</span></div>
-      <button className="user-pill" onClick={logout}>
-        <span className="dot" />
-        {session.username}
-        {session.isTeacher && <span className="teacher-badge">Lehrerin</span>}
-      </button>
+      <UserMenu session={session} onLogout={logout} />
     </header>
     <nav className="nav">
       <button className={`nav-tab${tab === "learn" ? " active" : ""}`} onClick={() => setTab("learn")}>🃏 Lernen</button>
@@ -233,7 +238,43 @@ export default function App() {
   </div></>);
 }
 
-function AuthScreen() {
+function UserMenu({ session, onLogout }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDocClick); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  return (
+    <div className="user-menu" ref={ref}>
+      <button className="user-pill" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}>
+        <span className="dot" />
+        {session.username}
+        {session.isTeacher && <span className="teacher-badge">Lehrerin</span>}
+        <span className="user-caret" style={{ transform: open ? "rotate(180deg)" : "none" }}>▾</span>
+      </button>
+      {open && (
+        <div className="user-menu-dropdown" role="menu">
+          <div className="user-menu-head">
+            <div className="user-menu-name">{session.username}</div>
+            <div className="user-menu-sub">{session.isTeacher ? "Lehrerin" : "Angemeldet"}</div>
+          </div>
+          <button className="user-menu-item" role="menuitem" onClick={() => { setOpen(false); onLogout(); }}>
+            ↪ Abmelden
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuthScreen({ setRegistering }) {
   const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -253,23 +294,34 @@ function AuthScreen() {
         await signInWithEmailAndPassword(auth, email, password);
       } else {
         if (password.length < LIMIT.password) { setErr(`Passwort mindestens ${LIMIT.password} Zeichen.`); setBusy(false); return; }
+        if (teacherCode) setRegistering(true);
         const cred = await createUserWithEmailAndPassword(auth, email, password);
-        await dbSet(`users/${cred.user.uid}`, { username: u, lang, createdAt: serverTimestamp() });
         if (teacherCode) {
+          let claimStatus = 0;
           try {
             const token = await cred.user.getIdToken();
-            await fetch("/api/claim-teacher", {
+            const res = await fetch("/api/claim-teacher", {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
               body: JSON.stringify({ code: teacherCode }),
             });
-            await cred.user.getIdToken(true);
+            claimStatus = res.status;
           } catch {}
+          if (claimStatus !== 200) {
+            await cred.user.delete().catch(() => {});
+            setRegistering(false);
+            setErr(claimStatus === 429 ? "Zu viele Versuche. Bitte später erneut versuchen." : "Lehrerinnen-Code ungültig.");
+            setBusy(false);
+            return;
+          }
+          await cred.user.getIdToken(true);
         }
+        await dbSet(`users/${cred.user.uid}`, { username: u, lang, createdAt: serverTimestamp() });
       }
     } catch {
       setErr(mode === "login" ? "Login fehlgeschlagen." : "Registrierung fehlgeschlagen (Name evtl. vergeben).");
     }
+    setRegistering(false);
     setBusy(false);
   }
 
@@ -410,10 +462,15 @@ function LearnTab({ session }) {
     if (!card) return;
     const p = progress[card.id] || { level: 0 };
     const val = nextReview(p.level, knew);
+    const staysDue = isDue(val);
     setProgress({ ...progress, [card.id]: val });
     await saveOneProgress(session.uid, card.id, val);
     setRevealed(false);
-    setIdx((i) => (i >= dueCards.length - 1 ? 0 : i + 1));
+    setIdx((i) => {
+      if (staysDue) return i >= dueCards.length - 1 ? 0 : i + 1;
+      const remaining = dueCards.length - 1;
+      return remaining <= 0 ? 0 : i % remaining;
+    });
   }
 
   const langLabel = LANGUAGES.find((l) => l.code === session.lang)?.label?.split(" ")[0] || "Muttersprache";
