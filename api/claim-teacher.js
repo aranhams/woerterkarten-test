@@ -38,7 +38,7 @@ export default async function handler(req, res) {
 
   if (!ok) {
     await registerFailure(keys, { windowMs: WINDOW_MS });
-    L.done("warn", "teacher.claim.invalid", 403, { uid: user.uid });
+    L.done("warn", "teacher.claim.invalid", 403, { uid: user.uid, attemptedCode: code.slice(0, 64) });
     return res.status(403).json({ error: "Invalid code" });
   }
 
