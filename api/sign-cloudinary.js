@@ -1,9 +1,3 @@
-// Vercel serverless — signed Cloudinary uploads (fixes F7).
-// Replaces the UNSIGNED preset. The Cloudinary API secret stays server-side and
-// a valid Firebase ID token is required, so anonymous internet users can no
-// longer push assets into the account.
-//
-// Env: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
 import crypto from "crypto";
 import { verifyBearer, applyCors } from "./_firebase.js";
 import { rateLimit } from "./_ratelimit.js";
@@ -26,7 +20,6 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Server misconfigured" });
   }
 
-  // Pin upload parameters (folder) into the signature.
   const timestamp = Math.round(Date.now() / 1000);
   const folder = "woerterkarten";
   const toSign = `folder=${folder}&timestamp=${timestamp}`;

@@ -1,11 +1,3 @@
-// Shared helper for the Vercel serverless functions (not a route — `_` prefix).
-// Verifies the caller's Firebase ID token and applies a tight CORS policy.
-// Requires: firebase-admin  (see package.json)
-//
-// Env:
-//   FIREBASE_SERVICE_ACCOUNT  JSON of a service-account key (or use ADC)
-//   APP_ORIGIN                comma-separated allowed origins for CORS
-//                             (optional — same-origin needs nothing here)
 import { getApps, getApp, initializeApp, cert, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, initializeFirestore } from "firebase-admin/firestore";
@@ -17,7 +9,6 @@ function ensureApp() {
   }
 }
 
-// Returns the decoded token (with .uid) or null.
 export async function verifyBearer(req) {
   ensureApp();
   const authz = req.headers.authorization || "";
@@ -26,8 +17,6 @@ export async function verifyBearer(req) {
   try { return await getAuth().verifyIdToken(token); } catch { return null; }
 }
 
-// Only echo an allow-origin for explicitly allow-listed origins (fixes the old
-// `Access-Control-Allow-Origin: *`). Same-origin calls need no header at all.
 export function applyCors(req, res) {
   const allowed = (process.env.APP_ORIGIN || "").split(",").map((s) => s.trim()).filter(Boolean);
   const origin = req.headers.origin;
@@ -39,16 +28,12 @@ export function applyCors(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
 
-// Firestore handle for the serverless functions (shared translation cache, etc.).
-// preferRest avoids the gRPC channel warm-up that dominates cold-start latency
-// for the handful of doc reads/writes these functions do on Vercel. Cached so
-// initializeFirestore runs at most once per instance.
 let _db = null;
 export function getDb() {
   ensureApp();
   if (!_db) {
     try { _db = initializeFirestore(getApp(), { preferRest: true }); }
-    catch { _db = getFirestore(); } // already initialized on this app
+    catch { _db = getFirestore(); }
   }
   return _db;
 }

@@ -29,7 +29,6 @@ service cloud.firestore {
           && d.source == source;
     }
 
-    // ---- Per-user private area -------------------------------------------
     match /users/{uid} {
       allow read: if isOwner(uid);
       allow create, update: if isOwner(uid)
@@ -54,7 +53,6 @@ service cloud.firestore {
       }
     }
 
-    // ---- Shared course content -------------------------------------------
     match /global_words/{wordId} {
       allow read:           if isSignedIn();
       allow create, update: if isTeacher() && validWord('global');
@@ -65,15 +63,11 @@ service cloud.firestore {
       allow create, update: if isTeacher() && validFolder('global');
       allow delete:         if isTeacher();
     }
-    // Shared per-language translation cache for global words. Written ONLY by the
-    // /api/translate function (Admin SDK bypasses rules); clients read only, so a
-    // student can't poison a translation shown to the whole class.
     match /global_translations/{lang}/words/{wordId} {
       allow read:  if isSignedIn();
       allow write: if false;
     }
 
-    // ---- Server-only rate-limit / lockout state (Admin SDK bypasses rules) --
     match /rate_limits/{doc} { allow read, write: if false; }
 
     // ---- Legacy: deny (delete this collection after migration) -----------

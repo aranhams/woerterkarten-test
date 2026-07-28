@@ -1,35 +1,13 @@
-// Woerterkarten — HARDENED (security patch).
-// See SECURITY_PATCH_CHANGES.txt for the full finding->fix mapping.
-//
-//   F2  Real authentication via Firebase Auth (no localStorage "session").
-//   F3  Role (isTeacher) read ONLY from the verified ID-token claim.
-//   F4  No client-side password hashing — Firebase Auth handles credentials.
-//   F5  Teacher code verified server-side (/api/claim-teacher); not in the bundle.
-//   F6  All user data keyed by request.auth.uid (not a client string) -> no IDOR.
-//   F8  Username sanitised + base32-encoded -> no Firestore path injection.
-//   F9  Integrity fields (source/addedBy) enforced by firestore.rules, not trusted.
-//   F10 Translate goes through the authenticated, rate-limited /api/translate.
-//   F11 Generic auth errors (no user enumeration).
-//   F13 Minimum password length raised to 8.
-//   F7  Cloudinary uploads are SIGNED via /api/sign-cloudinary (auth required).
-// NOTE: not sufficient alone — deploy firestore.rules + the /api functions + vercel.json.
-
 import { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import {
-  getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc, serverTimestamp,
+  initializeFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc, serverTimestamp,
 } from "firebase/firestore";
 import {
   getAuth, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, getIdTokenResult,
 } from "firebase/auth";
 
-// Firebase Web config is public by design; harden it with API-key HTTP-referrer
-// restrictions + Firebase App Check (see the patch notes), not by hiding it.
-// Firebase Web config. Values come from VITE_FIREBASE_* env vars when set (point
-// these at a TEST project for local/staging), falling back to the production
-// project otherwise. The config is public by design (harden with API-key
-// referrer restrictions + App Check, not by hiding it).
 const env = import.meta.env;
 const firebaseConfig = {
   apiKey: env.VITE_FIREBASE_API_KEY,
@@ -40,26 +18,20 @@ const firebaseConfig = {
   appId: env.VITE_FIREBASE_APP_ID,
 };
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const db = initializeFirestore(app, { experimentalForceLongPolling: true });
 const auth = getAuth(app);
 setPersistence(auth, browserLocalPersistence).catch(() => {});
 
-// ---- validation limits (defence in depth; firestore.rules re-enforces) ----
 const LIMIT = { username: 32, password: 8, de: 100, ru: 200, example: 300, folder: 60 };
 const ARTICLES = ["", "der", "die", "das", "ein", "eine"];
 const clip = (s, n) => String(s ?? "").slice(0, n);
 function cleanArticle(a) { a = String(a || "").trim().toLowerCase(); return ARTICLES.includes(a) ? a : ""; }
 function validImageUrl(u) { return u == null || /^https:\/\/res\.cloudinary\.com\/[^\s]+$/.test(u); }
-// Rewrite a stored Cloudinary secure_url into an optimized delivery URL:
-// f_auto (WebP/AVIF), q_auto (auto quality) and c_limit,w_<w> to cap the
-// delivered pixel size. Stored URLs have no transforms, so we insert once.
 function cldImg(u, w = 400) {
   if (!u || !u.includes("/image/upload/") || /\/image\/upload\/[^/]*(?:f_auto|q_auto|w_\d)/.test(u)) return u;
   return u.replace("/image/upload/", `/image/upload/f_auto,q_auto,c_limit,w_${w}/`);
 }
 
-// Deterministic, collision-free username -> email local part (base32 of UTF-8).
-// Guarantees a valid email and lets Firebase Auth enforce username uniqueness (F8).
 function b32(str) {
   const bytes = new TextEncoder().encode(str);
   const A = "abcdefghijklmnopqrstuvwxyz234567";
@@ -72,7 +44,6 @@ const emailForUsername = (u) => `u-${b32(u.trim().toLowerCase())}@users.woerterk
 
 async function idToken() { return auth.currentUser ? auth.currentUser.getIdToken() : null; }
 
-// ---- Cloudinary signed upload via /api/sign-cloudinary (fixes F7) ----------
 async function uploadImage(file) {
   if (!file.type.startsWith("image/")) throw new Error("Nur Bilder erlaubt.");
   if (file.size > 5 * 1024 * 1024) throw new Error("Bild zu groß (max 5 MB).");
@@ -92,7 +63,6 @@ async function uploadImage(file) {
   return data.secure_url;
 }
 
-// ---- Firestore helpers: paths built from a trusted uid, never user text -----
 async function dbGet(path) {
   try { const snap = await getDoc(doc(db, ...path.split("/"))); return snap.exists() ? snap.data() : null; } catch { return null; }
 }
@@ -117,10 +87,9 @@ const LANGUAGES = [
 ];
 
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600&display=swap');
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
   :root{--ink:#1a1a2e;--ink-soft:#3d3d5c;--ivory:#f8f5ef;--ivory-dark:#ede9e0;--sage:#5a7a6a;--sage-light:#8aaa96;--sage-pale:#e8f0eb;--accent:#c8773a;--accent-pale:#f5ebe0;--red-soft:#c0392b;--red-pale:#fdecea;--shadow:0 4px 24px rgba(26,26,46,0.10);--radius:14px;}
-  body{background:var(--ivory);color:var(--ink);font-family:'Inter',system-ui,sans-serif;min-height:100vh;}
+  body{background:var(--ivory);color:var(--ink);font-family:'Inter',system-ui,sans-serif;min-height:100vh;min-height:100dvh;}
   h1,h2,h3{font-family:'Lora',Georgia,serif;}
   .app{max-width:700px;margin:0 auto;padding:24px 16px 60px;}
   .header{display:flex;align-items:center;justify-content:space-between;padding-bottom:18px;border-bottom:1.5px solid var(--ivory-dark);margin-bottom:24px;}
@@ -208,17 +177,20 @@ const css = `
   .img-preview{width:60px;height:60px;object-fit:cover;border-radius:8px;display:block;margin:0 auto 6px;}
   .img-upload-label{font-size:12px;color:var(--ink-soft);}
   .uploading-indicator{font-size:12px;color:var(--sage);margin-top:4px;}
+  @media (max-width:640px){
+    .auth-box input,.auth-box select,.form-row input,.add-form input,.add-form select,.add-form textarea,.filter-bar input,.filter-bar select{font-size:16px;}
+    .btn-del{font-size:18px;padding:8px 11px;}
+  }
 `;
 
 export default function App() {
-  const [session, setSession] = useState(null);   // {uid, username, lang, isTeacher}
+  const [session, setSession] = useState(null);
   const [tab, setTab] = useState("learn");
   const [loading, setLoading] = useState(true);
 
-  // Single source of truth: Firebase Auth. Role comes from the verified claim.
   useEffect(() => {
     return onAuthStateChanged(auth, async (user) => {
-      if (!user) { setSession(null); setLoading(false); return; }
+      if (!user) { clearDataCache(); setSession(null); setLoading(false); return; }
       const [profile, tokenRes] = await Promise.all([
         dbGet(`users/${user.uid}`),
         getIdTokenResult(user),
@@ -257,7 +229,6 @@ export default function App() {
     {tab === "learn" && <LearnTab session={session} />}
     {tab === "words" && <WordsTab session={session} />}
     {tab === "folders" && <FoldersTab session={session} />}
-    {/* Defense in depth: even if this renders, firestore.rules blocks non-teachers. */}
     {tab === "manage" && session.isTeacher && <ManageTab />}
   </div></>);
 }
@@ -284,7 +255,6 @@ function AuthScreen() {
         if (password.length < LIMIT.password) { setErr(`Passwort mindestens ${LIMIT.password} Zeichen.`); setBusy(false); return; }
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         await dbSet(`users/${cred.user.uid}`, { username: u, lang, createdAt: serverTimestamp() });
-        // Teacher role granted server-side after code verification (F5).
         if (teacherCode) {
           try {
             const token = await cred.user.getIdToken();
@@ -293,8 +263,8 @@ function AuthScreen() {
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
               body: JSON.stringify({ code: teacherCode }),
             });
-            await cred.user.getIdToken(true); // refresh so the claim is live
-          } catch { /* wrong code is not fatal to signup — stay a normal user */ }
+            await cred.user.getIdToken(true);
+          } catch {}
         }
       }
     } catch {
@@ -332,14 +302,35 @@ function AuthScreen() {
   );
 }
 
-// All per-user paths built from the trusted uid (session.uid), never a name.
-async function loadGlobalWords() { return await dbGetAll("global_words"); }
-async function loadGlobalFolders() { return await dbGetAll("global_folders"); }
-async function loadUserWords(uid) { return await dbGetAll(`users/${uid}/words`); }
-async function loadUserFolders(uid) { return await dbGetAll(`users/${uid}/folders`); }
-async function loadLangTranslations(lang) { return await dbGetAll(`global_translations/${lang}/words`); }
-async function loadProgress(uid) { const d = await dbGet(`users/${uid}/meta/progress`); return d?.data || {}; }
-async function saveProgress(uid, progress) { await dbSet(`users/${uid}/meta/progress`, { data: progress }); }
+const _cache = new Map();
+async function cachedGetAll(col) {
+  if (_cache.has(col)) return _cache.get(col);
+  const rows = await dbGetAll(col);
+  _cache.set(col, rows);
+  return rows;
+}
+function cachePush(col, row) { if (_cache.has(col)) _cache.set(col, [..._cache.get(col), row]); }
+function cacheRemove(col, id) { if (_cache.has(col)) _cache.set(col, _cache.get(col).filter((r) => r.id !== id)); }
+function clearDataCache() { _cache.clear(); }
+
+async function loadGlobalWords() { return await cachedGetAll("global_words"); }
+async function loadGlobalFolders() { return await cachedGetAll("global_folders"); }
+async function loadUserWords(uid) { return await cachedGetAll(`users/${uid}/words`); }
+async function loadUserFolders(uid) { return await cachedGetAll(`users/${uid}/folders`); }
+async function loadLangTranslations(lang) { return await cachedGetAll(`global_translations/${lang}/words`); }
+async function loadProgress(uid) {
+  const key = `progress:${uid}`;
+  if (_cache.has(key)) return _cache.get(key);
+  const d = await dbGet(`users/${uid}/meta/progress`);
+  const p = d?.data || {};
+  _cache.set(key, p);
+  return p;
+}
+async function saveOneProgress(uid, wordId, val) {
+  const key = `progress:${uid}`;
+  if (_cache.has(key)) _cache.set(key, { ..._cache.get(key), [wordId]: val });
+  await dbSet(`users/${uid}/meta/progress`, { data: { [wordId]: val } });
+}
 
 function ImageUpload({ value, onChange, small }) {
   const [uploading, setUploading] = useState(false);
@@ -375,9 +366,6 @@ function LearnTab({ session }) {
   useEffect(() => {
     (async () => {
       const [gw, uw, gf, uf, prog, ut] = await Promise.all([loadGlobalWords(), loadUserWords(session.uid), loadGlobalFolders(), loadUserFolders(session.uid), loadProgress(session.uid), loadLangTranslations(session.lang)]);
-      // Overlay the shared per-language translation cache onto the global words,
-      // so every learner of this language reuses the same saved translations
-      // (one Anthropic call per word per language, not per student).
       const tmap = {};
       ut.forEach((t) => { tmap[t.id] = t; });
       const mergedGW = gw.map((w) => (tmap[w.id] ? { ...w, ru: tmap[w.id].ru, example: tmap[w.id].example || w.example } : w));
@@ -395,15 +383,9 @@ function LearnTab({ session }) {
   const learned = filteredWords.filter((w) => (progress[w.id]?.level || 0) >= 3).length;
   const card = dueCards[idx % Math.max(dueCards.length, 1)] || null;
 
-  // Feature: shared per-language auto-translation of global words. When a global
-  // card isn't translated for this language yet, call the authenticated,
-  // rate-limited /api/translate proxy with the wordId. The SERVER checks/writes a
-  // shared cache at global_translations/{lang}/words/{wordId} (Admin SDK), so the
-  // first student of a language pays the tokens and everyone else gets a cache
-  // hit. The client never writes the cache (firestore.rules) — no poisoning.
   async function ensureTranslation(c) {
     if (!c || c.source !== "global" || translatedIds.has(c.id)) return;
-    setTranslatedIds((s) => new Set(s).add(c.id)); // mark first so we call the API at most once per card
+    setTranslatedIds((s) => new Set(s).add(c.id));
     try {
       const token = await idToken();
       const res = await fetch("/api/translate", {
@@ -418,7 +400,7 @@ function LearnTab({ session }) {
         setAllWords((prev) => prev.map((w) => (w.id === c.id ? { ...w, ...trans } : w)));
       }
     } catch {
-      setTranslatedIds((s) => { const n = new Set(s); n.delete(c.id); return n; }); // allow a retry on failure
+      setTranslatedIds((s) => { const n = new Set(s); n.delete(c.id); return n; });
     }
   }
 
@@ -427,9 +409,9 @@ function LearnTab({ session }) {
   async function answer(knew) {
     if (!card) return;
     const p = progress[card.id] || { level: 0 };
-    const newProg = { ...progress, [card.id]: nextReview(p.level, knew) };
-    setProgress(newProg);
-    await saveProgress(session.uid, newProg);
+    const val = nextReview(p.level, knew);
+    setProgress({ ...progress, [card.id]: val });
+    await saveOneProgress(session.uid, card.id, val);
     setRevealed(false);
     setIdx((i) => (i >= dueCards.length - 1 ? 0 : i + 1));
   }
@@ -470,7 +452,7 @@ function LearnTab({ session }) {
       </div>
     ) : (<>
       <div className="fc-wrap">
-        <div className="fc" onClick={() => !revealed && setRevealed(true)}>
+        <div className="fc" translate="no" onClick={() => !revealed && setRevealed(true)}>
           {cardFolder && <div className="fc-folder">{cardFolder.icon} {cardFolder.name}</div>}
           <div className="fc-lvl">{lvlEmoji(progress[card.id]?.level)}</div>
           {card.imageUrl && validImageUrl(card.imageUrl) && <img src={cldImg(card.imageUrl, 600)} className="fc-img" alt="" decoding="async" />}
@@ -514,7 +496,6 @@ function WordsTab({ session }) {
     if (!de.trim()) return;
     setTranslating(true);
     try {
-      // Authenticated, rate-limited proxy (F10); the Anthropic key stays server-side.
       const token = await idToken();
       const res = await fetch("/api/translate", {
         method: "POST",
@@ -542,6 +523,7 @@ function WordsTab({ session }) {
     };
     try {
       await dbSet(`users/${session.uid}/words/${id}`, w);
+      cachePush(`users/${session.uid}/words`, { ...w, id });
       setAllWords((prev) => [...prev, { ...w, id }]);
       setDe(""); setArticle(""); setRu(""); setExample(""); setFolderId(""); setImageUrl("");
     } catch { alert("Speichern fehlgeschlagen."); }
@@ -550,6 +532,7 @@ function WordsTab({ session }) {
   async function deleteWord(word) {
     try {
       await deleteDoc(doc(db, `users/${session.uid}/words/${word.id}`));
+      cacheRemove(`users/${session.uid}/words`, word.id);
       setAllWords((prev) => prev.filter((w) => w.id !== word.id));
     } catch { alert("Löschen fehlgeschlagen."); }
   }
@@ -599,7 +582,7 @@ function WordsTab({ session }) {
       {visible.length === 0 && <div className="empty" style={{ padding: 24 }}><p>Keine Wörter gefunden.</p></div>}
       {visible.map((w) => {
         const folder = folders.find((f) => f.id === w.folderId);
-        const isOwn = w.source === "personal";  // personal words come only from this uid's subcollection
+        const isOwn = w.source === "personal";
         return (
           <div className="word-item" key={w.id}>
             {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
@@ -637,12 +620,13 @@ function FoldersTab({ session }) {
     if (!name.trim()) return;
     const id = `pf_${Date.now()}`;
     const f = { name: clip(name.trim(), LIMIT.folder), icon, source: "personal" };
-    try { await dbSet(`users/${session.uid}/folders/${id}`, f); setFolders((prev) => [...prev, { ...f, id }]); setName(""); setIcon("📁"); }
+    try { await dbSet(`users/${session.uid}/folders/${id}`, f); cachePush(`users/${session.uid}/folders`, { ...f, id }); setFolders((prev) => [...prev, { ...f, id }]); setName(""); setIcon("📁"); }
     catch { alert("Speichern fehlgeschlagen."); }
   }
   async function deleteFolder(fid) {
     try {
       await deleteDoc(doc(db, `users/${session.uid}/folders/${fid}`));
+      cacheRemove(`users/${session.uid}/folders`, fid);
       setFolders((prev) => prev.filter((f) => f.id !== fid));
       if (selected === fid) setSelected(null);
     } catch { alert("Löschen fehlgeschlagen."); }
@@ -704,7 +688,6 @@ function FoldersTab({ session }) {
 }
 
 function ManageTab() {
-  // Rendered only for teachers; firestore.rules independently enforces the role.
   const [de, setDe] = useState(""); const [article, setArticle] = useState("");
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
@@ -724,11 +707,11 @@ function ManageTab() {
   function flash(m) { setMsg(m); setTimeout(() => setMsg(""), 2500); }
 
   async function addWord() {
-    if (!de.trim()) return; // translation optional for global words — students auto-translate to their own language
+    if (!de.trim()) return;
     if (imageUrl && !validImageUrl(imageUrl)) { flash("⚠ Ungültige Bild-URL."); return; }
     const id = `g_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const w = { de: clip(de.trim(), LIMIT.de), article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global" };
-    try { await dbSet(`global_words/${id}`, w); setWords((prev) => [...prev, { ...w, id }]); setDe(""); setArticle(""); setRu(""); setExample(""); setImageUrl(""); flash("✓ Wort hinzugefügt"); }
+    try { await dbSet(`global_words/${id}`, w); cachePush("global_words", { ...w, id }); setWords((prev) => [...prev, { ...w, id }]); setDe(""); setArticle(""); setRu(""); setExample(""); setImageUrl(""); flash("✓ Wort hinzugefügt"); }
     catch { flash("⚠ Keine Berechtigung."); }
   }
 
@@ -737,7 +720,7 @@ function ManageTab() {
     const newW = [];
     for (const line of lines) {
       const parts = line.split(/[–\-—|]/).map((s) => s.trim());
-      if (!parts[0]) continue; // translation optional — a bare German word is allowed (auto-translated later)
+      if (!parts[0]) continue;
       let de_ = parts[0], art_ = "", ru_ = parts[1] || "", ex_ = parts[2] || "";
       const m = de_.match(/^(der|die|das|ein|eine)\s+(.+)$/i);
       if (m) { art_ = m[1]; de_ = m[2]; }
@@ -748,6 +731,7 @@ function ManageTab() {
       for (const w of newW) {
         const id = `g_${Date.now()}_${Math.random().toString(36).slice(2)}_${newW.indexOf(w)}`;
         await dbSet(`global_words/${id}`, w);
+        cachePush("global_words", { ...w, id });
         setWords((prev) => [...prev, { ...w, id }]);
       }
       setBulk(""); flash(`✓ ${newW.length} Wörter hinzugefügt`);
@@ -758,12 +742,12 @@ function ManageTab() {
     if (!folderName.trim()) return;
     const id = `gf_${Date.now()}`;
     const f = { name: clip(folderName.trim(), LIMIT.folder), icon: folderIcon, source: "global" };
-    try { await dbSet(`global_folders/${id}`, f); setFolders((prev) => [...prev, { ...f, id }]); setFolderName(""); setFolderIcon("📁"); flash("✓ Ordner erstellt"); }
+    try { await dbSet(`global_folders/${id}`, f); cachePush("global_folders", { ...f, id }); setFolders((prev) => [...prev, { ...f, id }]); setFolderName(""); setFolderIcon("📁"); flash("✓ Ordner erstellt"); }
     catch { flash("⚠ Keine Berechtigung."); }
   }
 
-  async function deleteWord(id) { try { await deleteDoc(doc(db, `global_words/${id}`)); setWords((prev) => prev.filter((w) => w.id !== id)); } catch { flash("⚠ Keine Berechtigung."); } }
-  async function deleteFolder(id) { try { await deleteDoc(doc(db, `global_folders/${id}`)); setFolders((prev) => prev.filter((f) => f.id !== id)); } catch { flash("⚠ Keine Berechtigung."); } }
+  async function deleteWord(id) { try { await deleteDoc(doc(db, `global_words/${id}`)); cacheRemove("global_words", id); setWords((prev) => prev.filter((w) => w.id !== id)); } catch { flash("⚠ Keine Berechtigung."); } }
+  async function deleteFolder(id) { try { await deleteDoc(doc(db, `global_folders/${id}`)); cacheRemove("global_folders", id); setFolders((prev) => prev.filter((f) => f.id !== id)); } catch { flash("⚠ Keine Berechtigung."); } }
 
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
