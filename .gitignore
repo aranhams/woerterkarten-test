@@ -1,11 +1,3 @@
-# ─────────────────────────────────────────────────────────────
-# Repo scoped to the Vercel deploy: frontend (Vite) + /api functions.
-# Everything listed here is kept OUT of git so only the files Vercel
-# needs are uploaded to GitHub. Tracked files end up being:
-#   package.json, package-lock.json, vite.config.js, index.html,
-#   src/, api/, vercel.json, firestore.rules, .env.example, .gitignore
-# ─────────────────────────────────────────────────────────────
-
 # Dependencies & build output (Vercel runs `npm install` + `vite build`)
 node_modules/
 dist/
