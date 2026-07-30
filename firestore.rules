@@ -5,7 +5,12 @@ service cloud.firestore {
 
     function isSignedIn()    { return request.auth != null; }
     function isOwner(uid)    { return isSignedIn() && request.auth.uid == uid; }
-    function isTeacher()     { return isSignedIn() && request.auth.token.teacher == true; }
+    function isAdmin()       { return isSignedIn() && request.auth.token.admin == true; }
+    // Admin implies teacher: an admin has every teacher capability plus admin-only ones.
+    function isTeacher()     { return isSignedIn() && (request.auth.token.teacher == true || request.auth.token.admin == true); }
+    function isList(v)       { return v is list; }
+    // memberUids on class content: contains the student's uid => visible to them; [] => private.
+    function isMember(d)     { return isSignedIn() && ('memberUids' in d) && (request.auth.uid in d.memberUids); }
     function isStr(v, n)     { return v is string && v.size() <= n; }
     function isCloudinary(v) { return v == null || (v is string && v.matches('https://res\\.cloudinary\\.com/[^ ]+')); }
     function articleOk(v)    { return v in ['', 'der', 'die', 'das', 'ein', 'eine']; }
@@ -29,12 +34,28 @@ service cloud.firestore {
           && d.source == source;
     }
 
+    // Documents the class schema. Class docs are written only by the Admin SDK
+    // (see /api/class-sync), which bypasses rules — so this gates nothing today,
+    // but keeps the shape explicit for future client writes.
+    function validClass() {
+      let d = request.resource.data;
+      return isStr(d.name, 60) && d.name.size() > 0
+          && isStr(d.icon, 8) && isStr(d.createdBy, 64)
+          && isList(d.memberUids) && isList(d.folders) && isList(d.wordIds);
+    }
+
     match /users/{uid} {
       allow read: if isOwner(uid);
-      allow create, update: if isOwner(uid)
-                            && request.resource.data.keys().hasOnly(['username', 'lang', 'createdAt'])
-                            && isStr(request.resource.data.username, 32)
-                            && isStr(request.resource.data.lang, 5);
+      allow create: if isOwner(uid)
+                    && request.resource.data.keys().hasOnly(['username', 'lang', 'createdAt'])
+                    && isStr(request.resource.data.username, 32)
+                    && isStr(request.resource.data.lang, 5);
+      // username is the login identity (auth email is derived from it) — immutable after
+      // creation. Only lang may change; other fields must stay as stored.
+      allow update: if isOwner(uid)
+                    && request.resource.data.keys().hasOnly(['username', 'lang', 'createdAt'])
+                    && request.resource.data.username == resource.data.username
+                    && isStr(request.resource.data.lang, 5);
       allow delete: if false;
 
       match /words/{wordId} {
@@ -53,15 +74,24 @@ service cloud.firestore {
       }
     }
 
+    // Class content (Kurs). Strict scoping: a student may read a doc only if their uid
+    // is in its memberUids (i.e. it was assigned to one of their classes). Unassigned
+    // content ([] memberUids) is private; teachers can read everything.
     match /global_words/{wordId} {
-      allow read:           if isSignedIn();
+      allow read:           if isTeacher() || isMember(resource.data);
       allow create, update: if isTeacher() && validWord('global');
       allow delete:         if isTeacher();
     }
     match /global_folders/{folderId} {
-      allow read:           if isSignedIn();
+      allow read:           if isTeacher() || isMember(resource.data);
       allow create, update: if isTeacher() && validFolder('global');
       allow delete:         if isTeacher();
+    }
+    // Classes: teachers see all; students see only classes they belong to.
+    // All writes go through /api/class-sync (Admin SDK), so client writes are denied.
+    match /classes/{classId} {
+      allow read:  if isTeacher() || isMember(resource.data);
+      allow write: if false;
     }
     match /global_translations/{lang}/words/{wordId} {
       allow read:  if isSignedIn();
@@ -69,6 +99,10 @@ service cloud.firestore {
     }
 
     match /rate_limits/{doc} { allow read, write: if false; }
+
+    // Admin-only server config (the teacher enrollment code). Admin SDK only — every
+    // read/write goes through /api/admin, which enforces the admin claim.
+    match /admin_config/{doc} { allow read, write: if false; }
 
     // ---- Legacy: deny (delete this collection after migration) -----------
     match /accounts/{doc} { allow read, write: if false; }

@@ -1,7 +1,8 @@
 import crypto from "crypto";
-import { verifyBearer, applyCors, getAuth } from "./_firebase.js";
+import { verifyBearer, applyCors, getAuth, getDb } from "./_firebase.js";
 import { checkLock, registerFailure, resetLock, clientIp } from "./_ratelimit.js";
 import { requestLogger } from "./_log.js";
+import { getTeacherCode } from "./_admin.js";
 
 const MAX_FAILS = 5;
 const WINDOW_MS = 15 * 60_000;
@@ -18,7 +19,7 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const expected = process.env.TEACHER_CODE || "";
+  const { code: expected } = await getTeacherCode(getDb());
   if (!expected) {
     L.done("error", "teacher.claim.misconfigured", 500, { uid: user.uid });
     return res.status(500).json({ error: "Server misconfigured" });

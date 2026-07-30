@@ -27,9 +27,8 @@ firebase-debug.log
 firestore-debug.log
 
 # Security assessment artifacts (contain real hashes / findings — keep out of git)
-woerterkarten_accounts_dump.txt
-SECURITY_REVIEW_woerterkarten.txt
-SECURITY_PATCH_CHANGES.txt
+claude/
+scripts/
 
 # Logs & OS/editor cruft
 *.log

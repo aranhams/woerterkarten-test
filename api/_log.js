@@ -1,8 +1,14 @@
 import crypto from "crypto";
 
-export function rawIp(req) {
-  const xff = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return xff || req.socket?.remoteAddress || "unknown";
+export function clientIp(req) {
+  const h = req.headers || {};
+  const vercel = String(h["x-vercel-forwarded-for"] || "").split(",")[0].trim();
+  if (vercel) return vercel;
+  const real = String(h["x-real-ip"] || "").trim();
+  if (real) return real;
+  const xff = String(h["x-forwarded-for"] || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (xff.length) return xff[xff.length - 1];
+  return req.socket?.remoteAddress || "unknown";
 }
 
 const SINK = { debug: console.log, info: console.log, warn: console.warn, error: console.error, alert: console.error };
@@ -23,7 +29,7 @@ export function requestLogger(endpoint, req) {
   const base = {
     endpoint,
     reqId,
-    ip: rawIp(req),
+    ip: clientIp(req),
     ua: (req.headers["user-agent"] || "").slice(0, 160) || undefined,
   };
   const t0 = Date.now();

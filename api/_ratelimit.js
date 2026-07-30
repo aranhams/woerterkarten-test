@@ -5,10 +5,7 @@ function db() { return getDb(); }
 
 const col = () => db().collection("rate_limits");
 
-export function clientIp(req) {
-  const xff = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return xff || req.socket?.remoteAddress || "unknown";
-}
+export { clientIp } from "./_log.js";
 
 export async function rateLimit(key, { max = 30, windowMs = 60_000 } = {}) {
   const ref = col().doc(`rl_${key}`);
