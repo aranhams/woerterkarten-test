@@ -14,6 +14,15 @@ import { KurseTab } from "./components/tabs/KurseTab";
 import { StudentsTab } from "./components/tabs/StudentsTab";
 import { AdminTab } from "./components/tabs/AdminTab";
 
+const TAB_KEY = "dw_tab";
+function tabAllowed(t, { isTeacher, isAdmin, studentView }) {
+  const learner = !isTeacher || studentView;
+  if (t === "learn" || t === "words" || t === "folders") return learner;
+  if (t === "manage" || t === "kurse") return isTeacher;
+  if (t === "admin") return isAdmin;
+  return false;
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [tab, setTab] = useState("learn");
@@ -37,17 +46,24 @@ export default function App() {
         isTeacher,
         isAdmin,
       });
-      setTab(isTeacher ? "kurse" : "learn");
+      const saved = localStorage.getItem(TAB_KEY);
+      const sv = localStorage.getItem("dw_studentview") === "1";
+      const fallback = isTeacher ? "manage" : "learn";
+      setTab(saved && tabAllowed(saved, { isTeacher, isAdmin, studentView: sv }) ? saved : fallback);
       setLoading(false);
     });
   }, []);
 
-  function logout() { signOut(auth); }
+  useEffect(() => {
+    if (!loading && session) localStorage.setItem(TAB_KEY, tab);
+  }, [tab, loading, session]);
+
+  function logout() { localStorage.removeItem(TAB_KEY); signOut(auth); }
   function toggleStudentView() {
     const nv = !studentView;
     localStorage.setItem("dw_studentview", nv ? "1" : "0");
     setStudentView(nv);
-    if (!nv && (tab === "learn" || tab === "words" || tab === "folders")) setTab("kurse");
+    if (!nv && (tab === "learn" || tab === "words" || tab === "folders")) setTab("manage");
   }
 
   if (loading) return <div className="app"><div className="loading"><div className="spinner" /><br />Lädt…</div></div>;
