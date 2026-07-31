@@ -11,7 +11,7 @@ export async function getTeacherCode(db) {
     const snap = await db.collection(COLLECTION).doc(DOC_ID).get();
     const stored = snap.exists ? snap.data()?.code : null;
     if (stored) return { code: String(stored), source: "stored" };
-  } catch { /* fall through to env */ }
+  } catch {}
   const env = process.env.TEACHER_CODE || "";
   return { code: env, source: env ? "env" : "none" };
 }

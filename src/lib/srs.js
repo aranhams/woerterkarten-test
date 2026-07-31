@@ -10,3 +10,8 @@ export function isDue(p) {
 }
 
 export const lvlEmoji = (l) => ["🌱", "🌿", "🌲", "⭐", "🏆", "💎"][l ?? 0] || "🌱";
+
+export function effProgress(word, p) {
+  if ((word?.deRev || 0) !== (p?.rev || 0)) return { level: 0, due: 0 };
+  return p;
+}

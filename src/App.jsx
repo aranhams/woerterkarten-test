@@ -71,7 +71,7 @@ export default function App() {
     {tab === "learn" && learnerTabs && <LearnTab session={session} />}
     {tab === "words" && learnerTabs && <WordsTab session={session} />}
     {tab === "folders" && learnerTabs && <FoldersTab session={session} />}
-    {tab === "manage" && session.isTeacher && <ManageTab />}
+    {tab === "manage" && session.isTeacher && <ManageTab session={session} />}
     {tab === "kurse" && session.isTeacher && <KurseTab session={session} />}
     {tab === "admin" && session.isAdmin && <><AdminTab /><StudentsTab session={session} /></>}
   </div>);

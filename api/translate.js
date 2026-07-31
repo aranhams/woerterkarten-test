@@ -1,13 +1,7 @@
 import { verifyBearer, applyCors, getDb } from "./_firebase.js";
 import { rateLimit } from "./_ratelimit.js";
 import { requestLogger } from "./_log.js";
-
-const LANG_NAMES = {
-  RU: "Russisch", UK: "Ukrainisch", TR: "Türkisch", AR: "Arabisch",
-  PL: "Polnisch", RO: "Rumänisch", FA: "Persisch", VI: "Vietnamesisch",
-  ZH: "Chinesisch", ES: "Spanisch", FR: "Französisch", EN: "Englisch",
-  IT: "Italienisch", PT: "Portugiesisch", JA: "Japanisch",
-};
+import { LANG_NAMES } from "./_langs.js";
 
 export default async function handler(req, res) {
   const L = requestLogger("translate", req);
@@ -50,7 +44,11 @@ export default async function handler(req, res) {
       cacheRef = db.doc(`global_translations/${lang}/words/${wordId}`);
       const gwRef = db.doc(`global_words/${wordId}`);
       const [cacheSnap, gwSnap] = await db.getAll(cacheRef, gwRef);
-      if (cacheSnap.exists) {
+      const norm = (s) => String(s || "").replace(/[ -]/g, " ").slice(0, 80).trim();
+      const gde = gwSnap.exists ? norm(gwSnap.data().de) : "";
+      const cachedDe = cacheSnap.exists ? norm(cacheSnap.data().de) : "";
+      const fresh = cacheSnap.exists && (!gde || cachedDe === gde);
+      if (fresh) {
         const c = cacheSnap.data();
         L.done("info", "translate.cache_hit", 200, { uid: user.uid, lang, wordId });
         return res.status(200).json({
@@ -59,9 +57,8 @@ export default async function handler(req, res) {
         });
       }
       if (gwSnap.exists) {
-        const d = gwSnap.data();
-        const gde = String(d.de || "").replace(/[ -]/g, " ").slice(0, 80).trim();
-        if (gde) { word = gde; article = String(d.article || "").replace(/[^A-Za-zÄÖÜäöüß ]/g, "").slice(0, 10).trim(); }
+        if (gde) { word = gde; article = String(gwSnap.data().article || "").replace(/[^A-Za-zÄÖÜäöüß ]/g, "").slice(0, 10).trim(); }
+        if (cacheSnap.exists) L.log("info", "translate.cache_stale", { uid: user.uid, lang, wordId });
       } else {
         cacheRef = null;
       }

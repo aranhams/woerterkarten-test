@@ -15,7 +15,8 @@ service cloud.firestore {
     function isCloudinary(v) { return v == null || (v is string && v.matches('https://res\\.cloudinary\\.com/[^ ]+')); }
     function articleOk(v)    { return v in ['', 'der', 'die', 'das', 'ein', 'eine']; }
 
-    function validWord(source) {
+    // Field-level checks shared by create & update.
+    function wordFieldsOk(source) {
       let d = request.resource.data;
       return isStr(d.de, 100) && d.de.size() > 0
           && isStr(d.ru, 200) && (source == 'global' || d.ru.size() > 0)
@@ -24,7 +25,28 @@ service cloud.firestore {
           && (d.folderId == null || isStr(d.folderId, 64))
           && isCloudinary(d.imageUrl)
           && d.source == source
-          && isStr(d.addedBy, 64);
+          && isStr(d.addedBy, 64)
+          && (!('deRev' in d)     || d.deRev is int)
+          && (!('updatedBy' in d) || d.updatedBy == request.auth.uid)   // un-spoofable
+          && (!('updatedAt' in d) || d.updatedAt == request.time);       // forces serverTimestamp()
+    }
+
+    // Exact allowed key set — nothing else may be written (blocks field injection / doc bloat).
+    function wordKeysOk(source) {
+      let d = request.resource.data;
+      return source == 'global'
+        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'updatedAt', 'updatedBy'])
+        : d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'deRev', 'updatedAt', 'updatedBy']);
+    }
+
+    function validWordCreate(source) {
+      return wordFieldsOk(source) && wordKeysOk(source);
+    }
+
+    function validWordUpdate(source) {
+      return wordFieldsOk(source) && wordKeysOk(source)
+          && request.resource.data.source  == resource.data.source     // immutable
+          && request.resource.data.addedBy == resource.data.addedBy;    // immutable
     }
 
     function validFolder(source) {
@@ -59,10 +81,12 @@ service cloud.firestore {
       allow delete: if false;
 
       match /words/{wordId} {
-        allow read:           if isOwner(uid);
-        allow create, update: if isOwner(uid) && validWord('personal')
-                              && request.resource.data.addedBy == uid;
-        allow delete:         if isOwner(uid);
+        allow read:   if isOwner(uid);
+        allow create: if isOwner(uid) && validWordCreate('personal')
+                      && request.resource.data.addedBy == uid;
+        allow update: if isOwner(uid) && validWordUpdate('personal')
+                      && request.resource.data.addedBy == uid;
+        allow delete: if isOwner(uid);
       }
       match /folders/{folderId} {
         allow read:           if isOwner(uid);
@@ -78,9 +102,10 @@ service cloud.firestore {
     // is in its memberUids (i.e. it was assigned to one of their classes). Unassigned
     // content ([] memberUids) is private; teachers can read everything.
     match /global_words/{wordId} {
-      allow read:           if isTeacher() || isMember(resource.data);
-      allow create, update: if isTeacher() && validWord('global');
-      allow delete:         if isTeacher();
+      allow read:   if isTeacher() || isMember(resource.data);
+      allow create: if isTeacher() && validWordCreate('global');
+      allow update: if isTeacher() && validWordUpdate('global');
+      allow delete: if isTeacher();
     }
     match /global_folders/{folderId} {
       allow read:           if isTeacher() || isMember(resource.data);

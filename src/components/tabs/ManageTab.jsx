@@ -1,13 +1,15 @@
 import { useState, useEffect } from "react";
+import { serverTimestamp } from "firebase/firestore";
 import { LIMIT, FOLDER_PAGE, WORD_PAGE, FOLDER_ICONS } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
+import { validateWordInput, germanChanged, nextDeRev } from "../../lib/word";
 import { classSync } from "../../lib/api";
 import { loadGlobalWords, loadGlobalFolders } from "../../data/loaders";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
 
-export function ManageTab() {
+export function ManageTab({ session }) {
   const [de, setDe] = useState(""); const [article, setArticle] = useState("");
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
@@ -18,6 +20,7 @@ export function ManageTab() {
   const [editFolderId, setEditFolderId] = useState(null); const [editFolderName, setEditFolderName] = useState("");
   const [folderSearch, setFolderSearch] = useState(""); const [folderPage, setFolderPage] = useState(0);
   const [wordSearch, setWordSearch] = useState(""); const [wordPage, setWordPage] = useState(0);
+  const [wEdit, setWEdit] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -55,6 +58,28 @@ export function ManageTab() {
       cacheUpdate("global_words", w.id, { folderId: fid, memberUids });
       setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, folderId: fid, memberUids } : x)));
       flash("✓ Wort verschoben");
+    } catch { flash("⚠ Keine Berechtigung."); }
+  }
+
+  function startWordEdit(w) {
+    setWEdit({ id: w.id, de: w.de || "", article: w.article || "", ru: w.ru || "", example: w.example || "", imageUrl: w.imageUrl || "" });
+  }
+
+  async function saveWordEdit() {
+    const word = words.find((w) => w.id === wEdit.id);
+    if (!word) return;
+    const res = validateWordInput(wEdit, { requireRu: false });
+    if (!res.ok) { flash("⚠ " + res.error); return; }
+    const changedDe = germanChanged(word, res.clean);
+    const patch = { ...res.clean, deRev: nextDeRev(word, res.clean), updatedAt: serverTimestamp(), updatedBy: session.uid };
+    try {
+      await dbSet(`global_words/${wEdit.id}`, patch);
+      const localPatch = { ...patch, updatedAt: Date.now() };
+      cacheUpdate("global_words", wEdit.id, localPatch);
+      setWords((prev) => prev.map((w) => (w.id === wEdit.id ? { ...w, ...localPatch } : w)));
+      setWEdit(null);
+      flash("✓ Wort aktualisiert");
+      if (changedDe) classSync("word-updated", { wordId: word.id }).catch(() => {});
     } catch { flash("⚠ Keine Berechtigung."); }
   }
 
@@ -218,19 +243,42 @@ export function ManageTab() {
     <div className="word-list">
       {filteredWords.length === 0 && <div className="empty" style={{ padding: 20 }}><p>{words.length === 0 ? "Noch keine Kurswörter." : "Keine Treffer."}</p></div>}
       {pagedWords.map((w) => (
-        <div className="word-item" key={w.id}>
-          {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
-          <div className="wi-text">
-            <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
-            <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
+        wEdit && wEdit.id === w.id ? (
+          <div className="word-item" key={w.id} style={{ flexWrap: "wrap" }}>
+            <div className="add-form" style={{ width: "100%", margin: 0 }}>
+              <div className="form-row">
+                <input className="in-sm" placeholder="der/die/das" value={wEdit.article} onChange={(e) => setWEdit({ ...wEdit, article: e.target.value })} />
+                <input placeholder="Deutsches Wort" value={wEdit.de} maxLength={LIMIT.de} onChange={(e) => setWEdit({ ...wEdit, de: e.target.value })} />
+                <input placeholder="Übersetzung (optional)" value={wEdit.ru} maxLength={LIMIT.ru} onChange={(e) => setWEdit({ ...wEdit, ru: e.target.value })} />
+              </div>
+              <div className="form-row">
+                <input placeholder="Beispielsatz (optional)" value={wEdit.example} maxLength={LIMIT.example} onChange={(e) => setWEdit({ ...wEdit, example: e.target.value })} />
+              </div>
+              <div className="form-row" style={{ alignItems: "flex-end" }}>
+                <ImageUpload value={wEdit.imageUrl} onChange={(url) => setWEdit({ ...wEdit, imageUrl: url })} small />
+                <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                  <button className="btn-sm" onClick={saveWordEdit} disabled={!wEdit.de.trim()}>Speichern</button>
+                  <button className="btn-sm" onClick={() => setWEdit(null)}>Abbrechen</button>
+                </div>
+              </div>
+            </div>
           </div>
-          <select value={w.folderId || ""} onChange={(e) => moveWord(w, e.target.value)} title="Ordner wechseln"
-            style={{ flex: "none", maxWidth: 130, padding: "6px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "var(--ivory)", outline: "none", fontFamily: "inherit" }}>
-            <option value="">📂 Kein Ordner</option>
-            {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
-          </select>
-          <button className="btn-del" onClick={() => deleteWord(w.id)}>✕</button>
-        </div>
+        ) : (
+          <div className="word-item" key={w.id}>
+            {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
+            <div className="wi-text">
+              <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
+              <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
+            </div>
+            <select value={w.folderId || ""} onChange={(e) => moveWord(w, e.target.value)} title="Ordner wechseln"
+              style={{ flex: "none", maxWidth: 130, padding: "6px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "var(--ivory)", outline: "none", fontFamily: "inherit" }}>
+              <option value="">📂 Kein Ordner</option>
+              {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+            </select>
+            <button className="btn-sm" onClick={() => startWordEdit(w)} title="Bearbeiten">✏️</button>
+            <button className="btn-del" onClick={() => deleteWord(w.id)}>✕</button>
+          </div>
+        )
       ))}
     </div>
     {filteredWords.length > WORD_PAGE && (

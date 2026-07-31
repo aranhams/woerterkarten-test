@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
+import { serverTimestamp } from "firebase/firestore";
 import { LIMIT } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
+import { validateWordInput, nextDeRev } from "../../lib/word";
 import { translateWord } from "../../lib/api";
 import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders } from "../../data/loaders";
 import { dbSet, dbDelete } from "../../data/db";
-import { cachePush, cacheRemove } from "../../data/cache";
+import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
 
 export function WordsTab({ session }) {
@@ -15,6 +17,8 @@ export function WordsTab({ session }) {
   const [allWords, setAllWords] = useState([]); const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [translating, setTranslating] = useState(false);
+  const [edit, setEdit] = useState(null);
+  const [editTranslating, setEditTranslating] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -63,6 +67,35 @@ export function WordsTab({ session }) {
     } catch { alert("Löschen fehlgeschlagen."); }
   }
 
+  function startEdit(w) {
+    setEdit({ id: w.id, de: w.de || "", article: w.article || "", ru: w.ru || "", example: w.example || "", folderId: w.folderId || "", imageUrl: w.imageUrl || "" });
+  }
+
+  async function autoTranslateEdit() {
+    if (!edit?.de.trim()) return;
+    setEditTranslating(true);
+    try {
+      const parsed = await translateWord({ word: edit.de.trim(), article: edit.article.trim(), lang: session.lang });
+      setEdit((e) => ({ ...e, ru: parsed.translation ? clip(parsed.translation, LIMIT.ru) : e.ru, example: parsed.example ? clip(parsed.example, LIMIT.example) : e.example }));
+    } catch { alert("Fehler beim Übersetzen. Bitte manuell eingeben."); }
+    setEditTranslating(false);
+  }
+
+  async function saveEdit() {
+    const word = allWords.find((w) => w.id === edit.id);
+    if (!word) return;
+    const res = validateWordInput(edit, { requireRu: true });
+    if (!res.ok) { alert(res.error); return; }
+    const patch = { ...res.clean, folderId: edit.folderId || null, deRev: nextDeRev(word, res.clean), updatedAt: serverTimestamp(), updatedBy: session.uid };
+    try {
+      await dbSet(`users/${session.uid}/words/${edit.id}`, patch);
+      const localPatch = { ...patch, updatedAt: Date.now() };
+      cacheUpdate(`users/${session.uid}/words`, edit.id, localPatch);
+      setAllWords((prev) => prev.map((w) => (w.id === edit.id ? { ...w, ...localPatch } : w)));
+      setEdit(null);
+    } catch { alert("Speichern fehlgeschlagen."); }
+  }
+
   const visible = allWords.filter((w) => {
     const mf = filterFolder === "all" || w.folderId === filterFolder;
     const ms = !search || w.de.toLowerCase().includes(search.toLowerCase()) || w.ru.toLowerCase().includes(search.toLowerCase());
@@ -109,6 +142,36 @@ export function WordsTab({ session }) {
       {visible.map((w) => {
         const folder = folders.find((f) => f.id === w.folderId);
         const isOwn = w.source === "personal";
+        if (edit && edit.id === w.id) {
+          return (
+            <div className="word-item" key={w.id} style={{ flexWrap: "wrap" }}>
+              <div className="add-form" style={{ width: "100%", margin: 0 }}>
+                <div className="form-row">
+                  <input className="in-sm" placeholder="der/die/das" value={edit.article} onChange={(e) => setEdit({ ...edit, article: e.target.value })} />
+                  <input placeholder="Deutsches Wort" value={edit.de} maxLength={LIMIT.de} onChange={(e) => setEdit({ ...edit, de: e.target.value })} />
+                  <button className="btn-add" onClick={autoTranslateEdit} disabled={!edit.de.trim() || editTranslating} style={{ background: "var(--accent)", flexShrink: 0 }}>{editTranslating ? "⏳" : "🤖"}</button>
+                </div>
+                <div className="form-row">
+                  <input placeholder="Übersetzung (Muttersprache)" value={edit.ru} maxLength={LIMIT.ru} onChange={(e) => setEdit({ ...edit, ru: e.target.value })} />
+                </div>
+                <div className="form-row">
+                  <input placeholder="Beispielsatz (optional)" value={edit.example} maxLength={LIMIT.example} onChange={(e) => setEdit({ ...edit, example: e.target.value })} />
+                  <select value={edit.folderId} onChange={(e) => setEdit({ ...edit, folderId: e.target.value })} style={{ flex: "none", width: 160 }}>
+                    <option value="">📂 Kein Ordner</option>
+                    {myFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+                  </select>
+                </div>
+                <div className="form-row" style={{ alignItems: "flex-end" }}>
+                  <ImageUpload value={edit.imageUrl} onChange={(url) => setEdit({ ...edit, imageUrl: url })} small />
+                  <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                    <button className="btn-sm" onClick={saveEdit} disabled={!edit.de.trim() || !edit.ru.trim()}>Speichern</button>
+                    <button className="btn-sm" onClick={() => setEdit(null)}>Abbrechen</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
         return (
           <div className="word-item" key={w.id}>
             {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
@@ -118,6 +181,7 @@ export function WordsTab({ session }) {
             </div>
             {folder && <span className="wi-folder">{folder.icon} {folder.name}</span>}
             <span className={`wi-badge ${w.source === "global" ? "badge-g" : "badge-p"}`}>{w.source === "global" ? "Kurs" : "Ich"}</span>
+            {isOwn && <button className="btn-sm" onClick={() => startEdit(w)} title="Bearbeiten">✏️</button>}
             {isOwn && <button className="btn-del" onClick={() => deleteWord(w)}>✕</button>}
           </div>
         );

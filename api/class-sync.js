@@ -4,6 +4,7 @@ import { requestLogger } from "./_log.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { recomputeDenorm, genUniqueJoinCode, makeCode } from "./_classes.js";
 import { resolveUid } from "./_users.js";
+import { LANG_CODES } from "./_langs.js";
 
 const MAX_FAILS = 40;
 const WINDOW_MS = 15 * 60_000;
@@ -12,7 +13,7 @@ const TEACHER_ACTIONS = new Set([
   "create", "rename", "delete", "regen-code",
   "list-students", "add-student", "remove-student", "reset-student-password",
   "set-folders", "set-folder-audience", "release-folder", "set-words",
-  "sync", "cleanup",
+  "sync", "cleanup", "word-updated",
 ]);
 const ADMIN_ACTIONS = new Set(["reset-student-password"]);
 const ALL_ACTIONS = new Set([...TEACHER_ACTIONS, "join"]);
@@ -177,8 +178,6 @@ async function dispatch({ db, auth, user, action, body }) {
       const target = await auth.getUser(uid).catch(() => null);
       if (!target) throw new HttpError(404, "Schüler nicht gefunden");
       const targetClaims = target.customClaims || {};
-      // Never reset a privileged account's password — covers admin-only accounts too,
-      // not just teachers (an admin provisioned without the teacher claim was reachable before).
       if (targetClaims.teacher === true || targetClaims.admin === true) throw new HttpError(403, "Nicht erlaubt");
       const password = makeCode(10);
       await auth.updateUser(uid, { password });
@@ -258,6 +257,15 @@ async function dispatch({ db, auth, user, action, body }) {
       return { touched, stamped: updated };
     }
 
+    case "word-updated": {
+      const wordId = String(body.wordId || "");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(wordId)) throw new HttpError(400, "wordId ungültig");
+      const batch = db.batch();
+      for (const lang of LANG_CODES) batch.delete(db.doc(`global_translations/${lang}/words/${wordId}`));
+      await batch.commit();
+      return { invalidated: LANG_CODES.length };
+    }
+
     case "sync": {
       const purged = await purgeMemberNames(db);
       const { updated } = await recomputeDenorm(db);
@@ -308,8 +316,6 @@ async function listAllStudents(db, auth) {
   return students;
 }
 
-// One-shot cleanup of legacy roster-name maps left on class docs from before
-// memberNames was dropped from the student-readable schema. Teacher-triggered via "sync".
 async function purgeMemberNames(db) {
   const snap = await db.collection("classes").get();
   const batch = db.batch();

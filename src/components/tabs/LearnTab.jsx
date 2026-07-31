@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { LIMIT, LANGUAGES } from "../../lib/constants";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
-import { isDue, nextReview, lvlEmoji } from "../../lib/srs";
+import { isDue, nextReview, lvlEmoji, effProgress } from "../../lib/srs";
 import { translateWord } from "../../lib/api";
 import {
   loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders,
@@ -34,9 +34,9 @@ export function LearnTab({ session }) {
 
   const setDir = (d) => { setDirection(d); localStorage.setItem("dw_dir", d); setRevealed(false); setIdx(0); };
   const filteredWords = filterFolder === "all" ? allWords : allWords.filter((w) => w.folderId === filterFolder);
-  const dueCards = filteredWords.filter((w) => isDue(progress[w.id]));
+  const dueCards = filteredWords.filter((w) => isDue(effProgress(w, progress[w.id])));
   const total = filteredWords.length;
-  const learned = filteredWords.filter((w) => (progress[w.id]?.level || 0) >= 3).length;
+  const learned = filteredWords.filter((w) => (effProgress(w, progress[w.id])?.level || 0) >= 3).length;
   const card = dueCards[idx % Math.max(dueCards.length, 1)] || null;
 
   async function ensureTranslation(c) {
@@ -57,8 +57,8 @@ export function LearnTab({ session }) {
 
   async function answer(knew) {
     if (!card) return;
-    const p = progress[card.id] || { level: 0 };
-    const val = nextReview(p.level, knew);
+    const p = effProgress(card, progress[card.id]) || { level: 0 };
+    const val = { ...nextReview(p.level, knew), rev: card.deRev || 0 };
     const staysDue = isDue(val);
     setProgress({ ...progress, [card.id]: val });
     await saveOneProgress(session.uid, card.id, val);
@@ -108,7 +108,7 @@ export function LearnTab({ session }) {
       <div className="fc-wrap">
         <div className="fc" translate="no" onClick={() => !revealed && setRevealed(true)}>
           {cardFolder && <div className="fc-folder">{cardFolder.icon} {cardFolder.name}</div>}
-          <div className="fc-lvl">{lvlEmoji(progress[card.id]?.level)}</div>
+          <div className="fc-lvl">{lvlEmoji(effProgress(card, progress[card.id])?.level)}</div>
           {card.imageUrl && validImageUrl(card.imageUrl) && <img src={cldImg(card.imageUrl, 600)} className="fc-img" alt="" decoding="async" />}
           <div className="fc-hint">{front.hint}</div>
           {front.isDE && front.article && <div className="fc-article">{front.article}</div>}
