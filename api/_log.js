@@ -6,8 +6,6 @@ export function clientIp(req) {
   if (vercel) return vercel;
   const real = String(h["x-real-ip"] || "").trim();
   if (real) return real;
-  const xff = String(h["x-forwarded-for"] || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (xff.length) return xff[xff.length - 1];
   return req.socket?.remoteAddress || "unknown";
 }
 

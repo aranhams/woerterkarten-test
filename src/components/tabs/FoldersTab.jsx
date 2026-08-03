@@ -5,9 +5,12 @@ import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders } 
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove } from "../../data/cache";
 
+const FOLDERS_PER_PAGE = 7;
+
 export function FoldersTab({ session }) {
   const [name, setName] = useState(""); const [icon, setIcon] = useState("📁");
   const [selected, setSelected] = useState(null);
+  const [folderSearch, setFolderSearch] = useState(""); const [folderPage, setFolderPage] = useState(0);
   const [allWords, setAllWords] = useState([]); const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -36,6 +39,11 @@ export function FoldersTab({ session }) {
     } catch { alert("Löschen fehlgeschlagen."); }
   }
   const wordsInFolder = (fid) => allWords.filter((w) => w.folderId === fid);
+  const fq = folderSearch.trim().toLowerCase();
+  const filteredFolders = fq ? folders.filter((f) => (f.name || "").toLowerCase().includes(fq)) : folders;
+  const folderPages = Math.max(1, Math.ceil(filteredFolders.length / FOLDERS_PER_PAGE));
+  const fPage = Math.min(folderPage, folderPages - 1);
+  const pagedFolders = filteredFolders.slice(fPage * FOLDERS_PER_PAGE, fPage * FOLDERS_PER_PAGE + FOLDERS_PER_PAGE);
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
   return (<>
@@ -50,13 +58,17 @@ export function FoldersTab({ session }) {
       </div>
     </div>
     <div className="sec-label">Ordner</div>
+    {folders.length > FOLDERS_PER_PAGE && (
+      <input placeholder="🔍 Ordner suchen…" value={folderSearch} onChange={(e) => { setFolderSearch(e.target.value); setFolderPage(0); }}
+        style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit", marginBottom: 10 }} />
+    )}
     <div className="folder-grid">
       <div className={`folder-card all${selected === null ? " active" : ""}`} onClick={() => setSelected(null)}>
         <div className="folder-icon">📂</div>
         <div className="folder-name">Alle Wörter</div>
         <div className="folder-count">{allWords.length} Wörter</div>
       </div>
-      {folders.map((f) => (
+      {pagedFolders.map((f) => (
         <div key={f.id} className={`folder-card${selected === f.id ? " active" : ""}`} onClick={() => setSelected((s) => (s === f.id ? null : f.id))}>
           <div className="folder-icon">{f.icon}</div>
           <div className="folder-name">{f.name}</div>
@@ -64,6 +76,14 @@ export function FoldersTab({ session }) {
         </div>
       ))}
     </div>
+    {fq && filteredFolders.length === 0 && <div className="transfer-empty">Keine Treffer.</div>}
+    {filteredFolders.length > FOLDERS_PER_PAGE && (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
+        <button className="btn-sm" onClick={() => setFolderPage((p) => Math.max(0, p - 1))} disabled={fPage <= 0} aria-label="Vorherige Ordner">‹</button>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Seite {fPage + 1} / {folderPages}</span>
+        <button className="btn-sm" onClick={() => setFolderPage((p) => Math.min(folderPages - 1, p + 1))} disabled={fPage >= folderPages - 1} aria-label="Weitere Ordner">›</button>
+      </div>
+    )}
     {selected && (() => {
       const folder = folders.find((f) => f.id === selected);
       const words = wordsInFolder(selected);

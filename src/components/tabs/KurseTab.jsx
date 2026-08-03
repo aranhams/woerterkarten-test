@@ -19,6 +19,7 @@ export function KurseTab({ session }) {
   const [copyMsg, setCopyMsg] = useState("");
   const [roster, setRoster] = useState([]);
   const [studentSearch, setStudentSearch] = useState("");
+  const [classSearch, setClassSearch] = useState("");
 
   async function reload() {
     clearDataCache();
@@ -44,6 +45,8 @@ export function KurseTab({ session }) {
 
   const selected = classes.find((c) => c.id === selectedId) || null;
   const looseWords = words.filter((w) => !w.folderId);
+  const classQuery = classSearch.trim().toLowerCase();
+  const filteredClasses = classQuery ? classes.filter((c) => (c.name || "").toLowerCase().includes(classQuery)) : classes;
   const members = selected ? (selected.memberUids || []) : [];
   const enrolledSet = new Set(members);
   const availableStudents = roster.filter((s) => !enrolledSet.has(s.uid) && (!studentSearch.trim() || s.username.toLowerCase().includes(studentSearch.trim().toLowerCase())));
@@ -139,9 +142,14 @@ export function KurseTab({ session }) {
     </div>
 
     <div className="sec-label">Kurse ({classes.length})</div>
+    {classes.length > 4 && (
+      <input placeholder="🔍 Kurs suchen…" value={classSearch} onChange={(e) => setClassSearch(e.target.value)}
+        style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit", marginBottom: 10 }} />
+    )}
     <div className="folder-grid">
       {classes.length === 0 && <div className="empty" style={{ padding: 20, gridColumn: "1/-1" }}><p>Noch keine Kurse.</p></div>}
-      {classes.map((c) => (
+      {classes.length > 0 && filteredClasses.length === 0 && <div className="transfer-empty" style={{ gridColumn: "1/-1" }}>Keine Treffer.</div>}
+      {filteredClasses.map((c) => (
         <div key={c.id} className={`folder-card${selectedId === c.id ? " active" : ""}`} onClick={() => { setSelectedId((s) => (s === c.id ? null : c.id)); setRenameVal(c.name); }}>
           <div className="folder-icon">{c.icon}</div>
           <div className="folder-name">{c.name}</div>
@@ -173,7 +181,7 @@ export function KurseTab({ session }) {
       <div className="add-form">
         <div className="sec-label" style={{ marginTop: 0 }}>Schüler ({members.length})</div>
         <input placeholder="🔍 Schüler suchen…" value={studentSearch} onChange={(e) => setStudentSearch(e.target.value)}
-          style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "var(--ivory)", outline: "none", fontFamily: "inherit" }} />
+          style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit" }} />
         <div className="transfer">
           <div className="transfer-col">
             <div className="sec-label">Verfügbar ({availableStudents.length})</div>

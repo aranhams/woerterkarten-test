@@ -1,20 +1,31 @@
 import { useState, useEffect } from "react";
 import { serverTimestamp } from "firebase/firestore";
-import { LIMIT } from "../../lib/constants";
+import { LIMIT, WORD_PAGE } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, nextDeRev } from "../../lib/word";
+import { effProgress, lvlEmoji } from "../../lib/srs";
 import { translateWord } from "../../lib/api";
-import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders } from "../../data/loaders";
+import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders, loadProgress } from "../../data/loaders";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
+
+function nextReviewText(due) {
+  if (!due || Date.now() >= due) return "jetzt fällig";
+  const ms = due - Date.now(), DAY = 86400000, HR = 3600000, MIN = 60000;
+  if (ms >= DAY) { const d = Math.round(ms / DAY); return `in ${d} ${d === 1 ? "Tag" : "Tagen"}`; }
+  if (ms >= HR) { const h = Math.round(ms / HR); return `in ${h} Std.`; }
+  const m = Math.max(1, Math.round(ms / MIN)); return `in ${m} Min.`;
+}
 
 export function WordsTab({ session }) {
   const [de, setDe] = useState(""); const [article, setArticle] = useState("");
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
   const [search, setSearch] = useState(""); const [filterFolder, setFilterFolder] = useState("all");
+  const [wordPage, setWordPage] = useState(0);
   const [allWords, setAllWords] = useState([]); const [folders, setFolders] = useState([]);
+  const [progress, setProgress] = useState({});
   const [loading, setLoading] = useState(true);
   const [translating, setTranslating] = useState(false);
   const [edit, setEdit] = useState(null);
@@ -22,9 +33,10 @@ export function WordsTab({ session }) {
 
   useEffect(() => {
     (async () => {
-      const [gw, uw, gf, uf] = await Promise.all([loadVisibleWords(session), loadUserWords(session.uid), loadVisibleFolders(session), loadUserFolders(session.uid)]);
+      const [gw, uw, gf, uf, prog] = await Promise.all([loadVisibleWords(session), loadUserWords(session.uid), loadVisibleFolders(session), loadUserFolders(session.uid), loadProgress(session.uid)]);
       setAllWords([...gw, ...uw]);
       setFolders([...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))]);
+      setProgress(prog);
       setLoading(false);
     })();
   }, []);
@@ -101,6 +113,9 @@ export function WordsTab({ session }) {
     const ms = !search || w.de.toLowerCase().includes(search.toLowerCase()) || w.ru.toLowerCase().includes(search.toLowerCase());
     return mf && ms;
   });
+  const wordPages = Math.max(1, Math.ceil(visible.length / WORD_PAGE));
+  const wPage = Math.min(wordPage, wordPages - 1);
+  const pagedVisible = visible.slice(wPage * WORD_PAGE, wPage * WORD_PAGE + WORD_PAGE);
   const myFolders = folders.filter((f) => f.source === "personal");
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
@@ -130,8 +145,8 @@ export function WordsTab({ session }) {
       </div>
     </div>
     <div className="filter-bar">
-      <input placeholder="🔍 Suchen…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <select value={filterFolder} onChange={(e) => setFilterFolder(e.target.value)}>
+      <input placeholder="🔍 Suchen…" value={search} onChange={(e) => { setSearch(e.target.value); setWordPage(0); }} />
+      <select value={filterFolder} onChange={(e) => { setFilterFolder(e.target.value); setWordPage(0); }}>
         <option value="all">Alle Ordner</option>
         {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
       </select>
@@ -139,7 +154,7 @@ export function WordsTab({ session }) {
     <div className="sec-label">Wörter ({visible.length})</div>
     <div className="word-list">
       {visible.length === 0 && <div className="empty" style={{ padding: 24 }}><p>Keine Wörter gefunden.</p></div>}
-      {visible.map((w) => {
+      {pagedVisible.map((w) => {
         const folder = folders.find((f) => f.id === w.folderId);
         const isOwn = w.source === "personal";
         if (edit && edit.id === w.id) {
@@ -173,19 +188,48 @@ export function WordsTab({ session }) {
           );
         }
         return (
-          <div className="word-item" key={w.id}>
-            {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
-            <div className="wi-text">
-              <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
-              <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
+          <div className="word-item" key={w.id} style={{ flexDirection: "column", alignItems: "stretch", gap: 9 }}>
+            {}
+            <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+              {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
+              <div className="wi-text">
+                <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
+                <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
+              </div>
             </div>
-            {folder && <span className="wi-folder">{folder.icon} {folder.name}</span>}
-            <span className={`wi-badge ${w.source === "global" ? "badge-g" : "badge-p"}`}>{w.source === "global" ? "Kurs" : "Ich"}</span>
-            {isOwn && <button className="btn-sm" onClick={() => startEdit(w)} title="Bearbeiten">✏️</button>}
-            {isOwn && <button className="btn-del" onClick={() => deleteWord(w)}>✕</button>}
+            {}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", borderTop: "1px solid var(--ivory-dark)", paddingTop: 8 }}>
+              {(() => {
+                const p = progress[w.id];
+                const eff = effProgress(w, p) || {};
+                const base = { fontSize: 12, color: "var(--ink-soft)" };
+                if (!p) return <span style={base}>🌱 Noch nicht gelernt</span>;
+                const level = eff.level || 0;
+                return (
+                  <span style={{ ...base, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <span title={`Stufe ${level} von 5`}>{lvlEmoji(level)} Stufe {level}</span>
+                    <span style={{ color: "var(--ivory-dark)" }}>·</span>
+                    <span>🔄 {nextReviewText(eff.due)}</span>
+                  </span>
+                );
+              })()}
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {folder && <span className="wi-folder">{folder.icon} {folder.name}</span>}
+                <span className={`wi-badge ${w.source === "global" ? "badge-g" : "badge-p"}`}>{w.source === "global" ? "Kurs" : "Ich"}</span>
+                {isOwn && <button className="btn-sm" onClick={() => startEdit(w)} title="Bearbeiten">✏️</button>}
+                {isOwn && <button className="btn-del" onClick={() => deleteWord(w)}>✕</button>}
+              </div>
+            </div>
           </div>
         );
       })}
     </div>
+    {visible.length > WORD_PAGE && (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
+        <button className="btn-sm" onClick={() => setWordPage((p) => Math.max(0, p - 1))} disabled={wPage <= 0}>‹ Zurück</button>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Seite {wPage + 1} / {wordPages}</span>
+        <button className="btn-sm" onClick={() => setWordPage((p) => Math.min(wordPages - 1, p + 1))} disabled={wPage >= wordPages - 1}>Weiter ›</button>
+      </div>
+    )}
   </>);
 }

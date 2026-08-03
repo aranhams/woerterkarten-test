@@ -1,5 +1,7 @@
 export const INTERVALS = [0, 1, 3, 7, 14, 30];
 
+export const MASTERY_LEVEL = 3;
+
 export function nextReview(level, knew) {
   const l = knew ? Math.min(level + 1, INTERVALS.length - 1) : 0;
   return { level: l, due: Date.now() + INTERVALS[l] * 86400000 };

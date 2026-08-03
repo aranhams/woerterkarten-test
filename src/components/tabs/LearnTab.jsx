@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { LIMIT, LANGUAGES } from "../../lib/constants";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
-import { isDue, nextReview, lvlEmoji, effProgress } from "../../lib/srs";
+import { isDue, nextReview, lvlEmoji, effProgress, MASTERY_LEVEL } from "../../lib/srs";
 import { translateWord } from "../../lib/api";
 import {
   loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders,
-  loadProgress, loadLangTranslations, saveOneProgress,
+  loadProgress, loadLangTranslations, saveOneProgress, recordActivity,
 } from "../../data/loaders";
 
 export function LearnTab({ session }) {
@@ -36,7 +36,7 @@ export function LearnTab({ session }) {
   const filteredWords = filterFolder === "all" ? allWords : allWords.filter((w) => w.folderId === filterFolder);
   const dueCards = filteredWords.filter((w) => isDue(effProgress(w, progress[w.id])));
   const total = filteredWords.length;
-  const learned = filteredWords.filter((w) => (effProgress(w, progress[w.id])?.level || 0) >= 3).length;
+  const learned = filteredWords.filter((w) => (effProgress(w, progress[w.id])?.level || 0) >= MASTERY_LEVEL).length;
   const card = dueCards[idx % Math.max(dueCards.length, 1)] || null;
 
   async function ensureTranslation(c) {
@@ -58,10 +58,22 @@ export function LearnTab({ session }) {
   async function answer(knew) {
     if (!card) return;
     const p = effProgress(card, progress[card.id]) || { level: 0 };
-    const val = { ...nextReview(p.level, knew), rev: card.deRev || 0 };
+    const nx = nextReview(p.level, knew);
+    const nm = Math.max(0, ((progress[card.id]?.nm) || 0) + (knew ? -1 : 1));
+    const lapsed = !knew && p.level >= MASTERY_LEVEL;
+    let lp = ((progress[card.id]?.lp) || 0) + (lapsed ? 1 : 0);
+    if (knew && nx.level >= MASTERY_LEVEL) lp = 0;
+    const lt = ((progress[card.id]?.lt) || 0) + (lapsed ? 1 : 0);
+    const val = { ...nx, rev: card.deRev || 0, nm, lp, lt };
     const staysDue = isDue(val);
-    setProgress({ ...progress, [card.id]: val });
+    const newProgress = { ...progress, [card.id]: val };
+    setProgress(newProgress);
     await saveOneProgress(session.uid, card.id, val);
+    const classWords = allWords.filter((w) => w.source === "global");
+    const masteryPct = classWords.length
+      ? Math.round(classWords.filter((w) => (effProgress(w, newProgress[w.id])?.level || 0) >= MASTERY_LEVEL).length / classWords.length * 100)
+      : undefined;
+    recordActivity(session.uid, knew, masteryPct).catch(() => {});
     setRevealed(false);
     setIdx((i) => {
       if (staysDue) return i >= dueCards.length - 1 ? 0 : i + 1;

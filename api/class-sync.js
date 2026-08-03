@@ -5,6 +5,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { recomputeDenorm, genUniqueJoinCode, makeCode } from "./_classes.js";
 import { resolveUid } from "./_users.js";
 import { LANG_CODES } from "./_langs.js";
+import { summarizeStudent, summarizeActivity, summarizeTrend, dayKey, effLevel, isDueEff, isHardFor, MASTERY_LEVEL } from "./_progress.js";
 
 const MAX_FAILS = 40;
 const WINDOW_MS = 15 * 60_000;
@@ -14,6 +15,7 @@ const TEACHER_ACTIONS = new Set([
   "list-students", "add-student", "remove-student", "reset-student-password",
   "set-folders", "set-folder-audience", "release-folder", "set-words",
   "sync", "cleanup", "word-updated",
+  "progress-report", "student-progress-detail",
 ]);
 const ADMIN_ACTIONS = new Set(["reset-student-password"]);
 const ALL_ACTIONS = new Set([...TEACHER_ACTIONS, "join"]);
@@ -63,7 +65,7 @@ export default async function handler(req, res) {
   const db = getDb();
   const auth = getAuth();
   try {
-    const result = await dispatch({ db, auth, user, action, body });
+    const result = await dispatch({ db, auth, user, action, body, L });
     L.done("info", `class.${action}`, 200, { uid: user.uid });
     return res.status(200).json({ ok: true, ...result });
   } catch (e) {
@@ -76,7 +78,7 @@ export default async function handler(req, res) {
   }
 }
 
-async function dispatch({ db, auth, user, action, body }) {
+async function dispatch({ db, auth, user, action, body, L }) {
   const classes = db.collection("classes");
   const stamp = () => FieldValue.serverTimestamp();
 
@@ -288,6 +290,155 @@ async function dispatch({ db, auth, user, action, body }) {
       }, { merge: true });
       await recomputeDenorm(db);
       return { classId: snap.docs[0].id, name: data.name };
+    }
+
+    case "progress-report": {
+      const { id, data } = await loadClass(body.classId);
+      const rosterAll = Array.isArray(data.memberUids) ? data.memberUids : [];
+      const CAP = 500;
+      const truncated = rosterAll.length > CAP;
+      const roster = truncated ? rosterAll.slice(0, CAP) : rosterAll;
+
+      const [wordsSnap, foldersSnap] = await Promise.all([
+        db.collection("global_words").get(),
+        db.collection("global_folders").get(),
+      ]);
+      const words = wordsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const folderMeta = new Map(foldersSnap.docs.map((d) => [d.id, d.data()]));
+      const wordById = new Map(words.map((w) => [w.id, w]));
+      const rosterSet = new Set(roster);
+      const assignedByUid = new Map(roster.map((u) => [u, []]));
+      for (const w of words) {
+        for (const u of (Array.isArray(w.memberUids) ? w.memberUids : [])) {
+          if (rosterSet.has(u)) assignedByUid.get(u).push(w);
+        }
+      }
+
+      const n = roster.length;
+      const refs = [
+        ...roster.map((u) => db.doc(`users/${u}/meta/progress`)),
+        ...roster.map((u) => db.doc(`users/${u}`)),
+        ...roster.map((u) => db.doc(`users/${u}/meta/activity`)),
+      ];
+      const snaps = n ? await db.getAll(...refs) : [];
+
+      const now = Date.now();
+      const WEEK_MS = 7 * 86400000;
+      const STRIP_DAYS = 21;
+      const stripKeys = Array.from({ length: STRIP_DAYS }, (_, i) => dayKey(now - (STRIP_DAYS - 1 - i) * 86400000));
+      const stripIdx = new Map(stripKeys.map((key, i) => [key, i]));
+      const stripActive = new Array(STRIP_DAYS).fill(0);
+      const rows = [];
+      const stuckByWord = new Map();
+      const folderRows = new Map();
+      for (let i = 0; i < n; i++) {
+        const uid = roster[i];
+        const progSnap = snaps[i];
+        const userSnap = snaps[n + i];
+        const actSnap = snaps[2 * n + i];
+        const progressData = (progSnap && progSnap.exists ? progSnap.data()?.data : null) || {};
+        const username = (userSnap && userSnap.exists ? userSnap.data()?.username : null) || uid.slice(0, 6);
+        const actData = (actSnap && actSnap.exists) ? actSnap.data() : null;
+        const activityDays = actData?.days || {};
+        const assigned = assignedByUid.get(uid) || [];
+        const act = summarizeActivity(activityDays, now);
+        const trend = summarizeTrend(actData?.weeks || {});
+        for (const [key, v] of Object.entries(activityDays)) {
+          if (((v && v.r) || 0) > 0 && stripIdx.has(key)) stripActive[stripIdx.get(key)]++;
+        }
+        rows.push({
+          uid, username, ...summarizeStudent(assigned, progressData, now),
+          streak: act.current, reviews30: act.reviews, correct30: act.correct,
+          trendDelta: trend.delta, trendSamples: trend.samples,
+        });
+
+        const perFolder = new Map();
+        for (const w of assigned) {
+          const p = progressData[w.id];
+          if (p) {
+            const rec = stuckByWord.get(w.id) || { stuck: 0, started: 0 };
+            rec.started++;
+            if (isHardFor(w, p)) rec.stuck++;
+            stuckByWord.set(w.id, rec);
+          }
+          if (w.folderId != null) {
+            const rec = perFolder.get(w.folderId) || { assigned: 0, sicher: 0 };
+            rec.assigned++;
+            if (effLevel(w, p) >= MASTERY_LEVEL) rec.sicher++;
+            perFolder.set(w.folderId, rec);
+          }
+        }
+        for (const [fid, rec] of perFolder) {
+          const list = folderRows.get(fid) || [];
+          list.push({ uid, username, pct: Math.round((rec.sicher / rec.assigned) * 100), mastered: rec.sicher, assigned: rec.assigned });
+          folderRows.set(fid, list);
+        }
+      }
+      rows.sort((a, b) => a.username.localeCompare(b.username));
+
+      const readiness = [...folderRows.entries()]
+        .map(([folderId, students]) => {
+          const meta = folderMeta.get(folderId) || {};
+          students.sort((a, b) => b.pct - a.pct || a.username.localeCompare(b.username));
+          return { folderId, name: meta.name || "Ordner", icon: meta.icon || "📁", students };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      const withAssigned = rows.filter((r) => r.assigned > 0);
+      const distribution = rows.reduce((a, r) => {
+        a.neu += r.neu; a.learning += r.learning; a.fastSicher += r.fastSicher; a.sicher += r.sicher; a.assigned += r.assigned; return a;
+      }, { neu: 0, learning: 0, fastSicher: 0, sicher: 0, assigned: 0 });
+      const aggregate = {
+        activeStudents: rows.filter((r) => r.lastActiveAt != null && now - r.lastActiveAt <= WEEK_MS).length,
+        avgPct: withAssigned.length ? Math.round(withAssigned.reduce((s, r) => s + r.pct, 0) / withAssigned.length) : 0,
+        totalDue: rows.reduce((s, r) => s + r.due, 0),
+        assignedStudents: withAssigned.length,
+        distribution,
+        classSicherPct: distribution.assigned ? Math.round((distribution.sicher / distribution.assigned) * 100) : 0,
+        practice: { windowDays: STRIP_DAYS, days: stripKeys.map((key, i) => ({ key, active: stripActive[i] })) },
+      };
+
+      const hardWords = [...stuckByWord.entries()]
+        .map(([wordId, rec]) => {
+          const w = wordById.get(wordId) || {};
+          return { wordId, de: w.de || "", article: w.article || "", stuck: rec.stuck, started: rec.started };
+        })
+        .filter((h) => h.stuck > 0)
+        .sort((a, b) => b.stuck - a.stuck || (b.stuck / b.started) - (a.stuck / a.started))
+        .slice(0, 15);
+
+      L.log("info", "class.progress-report", { uid: user.uid, classId: id, rosterSize: rosterAll.length });
+      return { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, readiness };
+    }
+
+    case "student-progress-detail": {
+      const { data } = await loadClass(body.classId);
+      const uid = String(body.uid || "");
+      if (!uid) throw new HttpError(400, "uid fehlt");
+      if (!(Array.isArray(data.memberUids) && data.memberUids.includes(uid))) throw new HttpError(403, "Nicht im Kurs");
+
+      const [wordsSnap, foldersSnap] = await Promise.all([
+        db.collection("global_words").get(),
+        db.collection("global_folders").get(),
+      ]);
+      const assigned = wordsSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((w) => Array.isArray(w.memberUids) && w.memberUids.includes(uid));
+      const folders = Object.fromEntries(foldersSnap.docs.map((d) => [d.id, { name: d.data().name || "Ordner", icon: d.data().icon || "📁" }]));
+      const [snap, actSnap] = await Promise.all([
+        db.doc(`users/${uid}/meta/progress`).get(),
+        db.doc(`users/${uid}/meta/activity`).get(),
+      ]);
+      const progressData = (snap.exists ? snap.data()?.data : null) || {};
+      const activity = (actSnap.exists ? actSnap.data()?.days : null) || {};
+      const now = Date.now();
+      const wordRows = assigned.map((w) => {
+        const p = progressData[w.id];
+        const level = effLevel(w, p);
+        return { wordId: w.id, de: w.de || "", article: w.article || "", folderId: w.folderId || null, level, started: !!p, mastered: level >= MASTERY_LEVEL, dueNow: isDueEff(w, p, now), hard: isHardFor(w, p), lapses: (p && p.lp) || 0, lapsesTotal: (p && p.lt) || 0 };
+      });
+      wordRows.sort((a, b) => (a.article + " " + a.de).localeCompare(b.article + " " + b.de));
+      return { words: wordRows, folders, activity };
     }
 
     default:

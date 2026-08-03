@@ -2,7 +2,7 @@ export const LIMIT = { username: 32, password: 8, de: 100, ru: 200, example: 300
 export const ARTICLES = ["", "der", "die", "das", "ein", "eine"];
 
 export const FOLDER_PAGE = 10;
-export const WORD_PAGE = 25;
+export const WORD_PAGE = 10;
 
 export { LANGUAGES } from "../../shared/languages.js";
 

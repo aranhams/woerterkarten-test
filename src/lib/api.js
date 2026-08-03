@@ -31,6 +31,9 @@ export async function classSync(action, payload = {}) {
   return data;
 }
 
+export const getProgressReport = (classId) => classSync("progress-report", { classId });
+export const getStudentProgressDetail = (classId, uid) => classSync("student-progress-detail", { classId, uid });
+
 export async function adminSync(action, payload = {}) {
   const token = await idToken();
   const res = await fetch("/api/admin", {

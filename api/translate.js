@@ -1,5 +1,5 @@
 import { verifyBearer, applyCors, getDb } from "./_firebase.js";
-import { rateLimit } from "./_ratelimit.js";
+import { rateLimit, clientIp } from "./_ratelimit.js";
 import { requestLogger } from "./_log.js";
 import { LANG_NAMES } from "./_langs.js";
 
@@ -22,16 +22,20 @@ export default async function handler(req, res) {
   }
 
   let { word, article, lang } = req.body || {};
-  word = String(word || "").replace(/[ -]/g, " ").slice(0, 80).trim();
+  word = String(word || "").replace(/[\x00-\x2d]/g, " ").trim().slice(0, 90);
   article = String(article || "").replace(/[^A-Za-zÄÖÜäöüß ]/g, "").slice(0, 10).trim();
   lang = String(lang || "").slice(0, 5).toUpperCase();
   if (!word) {
     L.done("warn", "translate.no_word", 400, { bodyKeys: Object.keys(req.body || {}).join(",") || null });
     return res.status(400).json({ error: "No word provided" });
   }
+  if (/[<>]/.test(word)) {
+    L.done("warn", "translate.invalid_chars", 400, { uid: user.uid, lang, len: word.length });
+    return res.status(400).json({ error: "Invalid word" });
+  }
   const langName = LANG_NAMES[lang] || "Russisch";
   dbg("translate.request", { uid: user.uid, word, article, lang, langName });
-  if (/\b(ignore|system|assistant|instruction|prompt)\b/i.test(word) || word.includes("<") || word.length >= 78) {
+  if (/\b(ignore|system|assistant|instruction|prompt)\b/i.test(word) || word.length >= 88) {
     L.log("warn", "translate.injection_suspect", { uid: user.uid, lang, word, len: word.length });
   }
 
@@ -44,7 +48,7 @@ export default async function handler(req, res) {
       cacheRef = db.doc(`global_translations/${lang}/words/${wordId}`);
       const gwRef = db.doc(`global_words/${wordId}`);
       const [cacheSnap, gwSnap] = await db.getAll(cacheRef, gwRef);
-      const norm = (s) => String(s || "").replace(/[ -]/g, " ").slice(0, 80).trim();
+      const norm = (s) => String(s || "").replace(/[ -]/g, " ").trim().slice(0, 90);
       const gde = gwSnap.exists ? norm(gwSnap.data().de) : "";
       const cachedDe = cacheSnap.exists ? norm(cacheSnap.data().de) : "";
       const fresh = cacheSnap.exists && (!gde || cachedDe === gde);
@@ -68,16 +72,43 @@ export default async function handler(req, res) {
     }
   }
 
+  const isFreeText = !cacheRef;
+  const dayKey = new Date().toISOString().slice(0, 10);
+
   const rl = await rateLimit(`translate:${user.uid}`, { max: 30, windowMs: 60_000 });
   if (rl.limited) {
-    L.done("warn", "translate.ratelimited", 429, { uid: user.uid, degraded: rl.degraded });
+    L.done("warn", "translate.ratelimited", 429, { uid: user.uid, path: isFreeText ? "text" : "cache", degraded: rl.degraded });
     res.setHeader("Retry-After", String(rl.retryAfterSec));
     return res.status(429).json({ error: "Too many requests" });
+  }
+
+  if (isFreeText) {
+    const ip = clientIp(req);
+    const checks = [
+      ["min", `translate:txt:${user.uid}`, { max: 20, windowMs: 60_000 }],
+      ["day", `translate:txtday:${user.uid}:${dayKey}`, { max: 150, windowMs: 86_400_000 }],
+      ["ip", `translate:ip:${ip}`, { max: 50, windowMs: 60_000 }],
+    ];
+    for (const [scope, key, opts] of checks) {
+      const r = await rateLimit(key, opts);
+      if (r.limited) {
+        L.done("warn", "translate.spend_limited", 429, { uid: user.uid, scope, ip: scope === "ip" ? ip : undefined, degraded: r.degraded });
+        res.setHeader("Retry-After", String(r.retryAfterSec));
+        return res.status(429).json({ error: "Too many requests" });
+      }
+    }
   }
 
   if (!process.env.ANTHROPIC_KEY) {
     L.done("error", "translate.misconfigured", 500, { uid: user.uid });
     return res.status(500).json({ error: "Server misconfigured" });
+  }
+
+  const budget = await rateLimit(`translate:budget:${dayKey}`, { max: 2000, windowMs: 86_400_000 });
+  if (budget.limited) {
+    L.done("alert", "translate.budget_exhausted", 503, { uid: user.uid, path: isFreeText ? "text" : "cache" });
+    res.setHeader("Retry-After", String(budget.retryAfterSec));
+    return res.status(503).json({ error: "Translation temporarily unavailable" });
   }
 
   try {

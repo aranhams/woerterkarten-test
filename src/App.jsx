@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { onAuthStateChanged, signOut, getIdTokenResult } from "firebase/auth";
 import { auth } from "./lib/firebase";
 import { dbGet } from "./data/db";
@@ -11,6 +11,7 @@ import { WordsTab } from "./components/tabs/WordsTab";
 import { FoldersTab } from "./components/tabs/FoldersTab";
 import { ManageTab } from "./components/tabs/ManageTab";
 import { KurseTab } from "./components/tabs/KurseTab";
+import { ProgressTab } from "./components/tabs/ProgressTab";
 import { StudentsTab } from "./components/tabs/StudentsTab";
 import { AdminTab } from "./components/tabs/AdminTab";
 
@@ -18,7 +19,7 @@ const TAB_KEY = "dw_tab";
 function tabAllowed(t, { isTeacher, isAdmin, studentView }) {
   const learner = !isTeacher || studentView;
   if (t === "learn" || t === "words" || t === "folders") return learner;
-  if (t === "manage" || t === "kurse") return isTeacher;
+  if (t === "manage" || t === "kurse" || t === "progress") return isTeacher;
   if (t === "admin") return isAdmin;
   return false;
 }
@@ -29,6 +30,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
   const [studentView, setStudentView] = useState(() => localStorage.getItem("dw_studentview") === "1");
+  const navRef = useRef(null);
 
   useEffect(() => {
     return onAuthStateChanged(auth, async (user) => {
@@ -58,6 +60,11 @@ export default function App() {
     if (!loading && session) localStorage.setItem(TAB_KEY, tab);
   }, [tab, loading, session]);
 
+  useEffect(() => {
+    const el = navRef.current?.querySelector(".nav-tab.active");
+    el?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+  }, [tab, loading]);
+
   function logout() { localStorage.removeItem(TAB_KEY); signOut(auth); }
   function toggleStudentView() {
     const nv = !studentView;
@@ -76,12 +83,13 @@ export default function App() {
       <div className="brand"><h1>Wörterkarten</h1><span>Deutsch lernen</span></div>
       <UserMenu session={session} onLogout={logout} studentView={studentView} onToggleStudentView={toggleStudentView} />
     </header>
-    <nav className="nav">
+    <nav className="nav" ref={navRef}>
       {learnerTabs && <button className={`nav-tab${tab === "learn" ? " active" : ""}`} onClick={() => setTab("learn")}>🃏 Lernen</button>}
       {learnerTabs && <button className={`nav-tab${tab === "words" ? " active" : ""}`} onClick={() => setTab("words")}>📋 Wörter</button>}
       {learnerTabs && <button className={`nav-tab${tab === "folders" ? " active" : ""}`} onClick={() => setTab("folders")}>📁 Ordner</button>}
       {session.isTeacher && <button className={`nav-tab${tab === "manage" ? " active" : ""}`} onClick={() => setTab("manage")}>✏️ Verwalten</button>}
       {session.isTeacher && <button className={`nav-tab${tab === "kurse" ? " active" : ""}`} onClick={() => setTab("kurse")}>👥 Kurse</button>}
+      {session.isTeacher && <button className={`nav-tab${tab === "progress" ? " active" : ""}`} onClick={() => setTab("progress")}>📊 Fortschritt</button>}
       {session.isAdmin && <button className={`nav-tab${tab === "admin" ? " active" : ""}`} onClick={() => setTab("admin")}>🔐 Administration</button>}
     </nav>
     {tab === "learn" && learnerTabs && <LearnTab session={session} />}
@@ -89,6 +97,7 @@ export default function App() {
     {tab === "folders" && learnerTabs && <FoldersTab session={session} />}
     {tab === "manage" && session.isTeacher && <ManageTab session={session} />}
     {tab === "kurse" && session.isTeacher && <KurseTab session={session} />}
+    {tab === "progress" && session.isTeacher && <ProgressTab session={session} />}
     {tab === "admin" && session.isAdmin && <><AdminTab /><StudentsTab session={session} /></>}
   </div>);
 }

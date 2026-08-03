@@ -1,4 +1,4 @@
-import { collection, query, where } from "firebase/firestore";
+import { collection, query, where, increment } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { dbGet, dbSet } from "./db";
 import { cachedGetAll, cachedQuery, cacheHas, cacheGet, cacheSet } from "./cache";
@@ -8,7 +8,17 @@ export const loadGlobalFolders = () => cachedGetAll("global_folders");
 export const loadUserWords = (uid) => cachedGetAll(`users/${uid}/words`);
 export const loadUserFolders = (uid) => cachedGetAll(`users/${uid}/folders`);
 export const loadLangTranslations = (lang) => cachedGetAll(`global_translations/${lang}/words`);
-export const loadAllClasses = () => cachedGetAll("classes");
+const classCreatedMs = (c) => {
+  const v = c.createdAt;
+  if (!v) return 0;
+  if (typeof v === "number") return v;
+  if (typeof v.toMillis === "function") return v.toMillis();
+  if (typeof v.seconds === "number") return v.seconds * 1000;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? 0 : t;
+};
+export const loadAllClasses = async () =>
+  [...(await cachedGetAll("classes"))].sort((a, b) => classCreatedMs(b) - classCreatedMs(a));
 
 export async function loadProgress(uid) {
   const key = `progress:${uid}`;
@@ -23,6 +33,19 @@ export async function saveOneProgress(uid, wordId, val) {
   const key = `progress:${uid}`;
   if (cacheHas(key)) cacheSet(key, { ...cacheGet(key), [wordId]: val });
   await dbSet(`users/${uid}/meta/progress`, { data: { [wordId]: val } });
+}
+
+function weekKey(ms) {
+  const d = new Date(ms);
+  const dow = (d.getUTCDay() + 6) % 7;
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - dow)).toISOString().slice(0, 10);
+}
+
+export function recordActivity(uid, knew, masteryPct) {
+  const now = Date.now();
+  const payload = { days: { [new Date(now).toISOString().slice(0, 10)]: { r: increment(1), c: increment(knew ? 1 : 0) } } };
+  if (Number.isFinite(masteryPct)) payload.weeks = { [weekKey(now)]: masteryPct };
+  return dbSet(`users/${uid}/meta/activity`, payload);
 }
 
 export const loadMyClasses = (uid) =>

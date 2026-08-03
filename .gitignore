@@ -36,3 +36,40 @@ npm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+# ===== Further files not needed for the Vercel deployment =====
+
+# Vercel CLI local project link & settings
+.vercel/
+
+# Generated documentation / deliverables (built from source, not part of the app)
+docs/
+
+# Tests & one-off debug scripts (run locally, never routed or deployed)
+*.test.js
+*.test.mjs
+*.test.jsx
+*.spec.js
+*.spec.mjs
+__tests__/
+api/_dump-nm.mjs
+
+# Stale backups
+*.old
+
+# Alternate build output & tool caches
+build/
+coverage/
+.eslintcache
+.turbo/
+
+# More logs & OS/editor cruft
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~

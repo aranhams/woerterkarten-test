@@ -21,7 +21,7 @@ export function ManageTab({ session }) {
   const [folderSearch, setFolderSearch] = useState(""); const [folderPage, setFolderPage] = useState(0);
   const [wordSearch, setWordSearch] = useState(""); const [wordPage, setWordPage] = useState(0);
   const [wEdit, setWEdit] = useState(null);
-  const [rowMsg, setRowMsg] = useState(null); // { id, text } — success/error shown below the word
+  const [rowMsg, setRowMsg] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -275,19 +275,27 @@ export function ManageTab({ session }) {
             </div>
           </div>
         ) : (
-          <div className="word-item">
-            {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
-            <div className="wi-text">
-              <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
-              <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
+          <div className="word-item" style={{ flexDirection: "column", alignItems: "stretch", gap: 9 }}>
+            {}
+            <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+              {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
+              <div className="wi-text">
+                <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
+                <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
+              </div>
             </div>
-            <select value={w.folderId || ""} onChange={(e) => moveWord(w, e.target.value)} title="Ordner wechseln"
-              style={{ flex: "none", maxWidth: 130, padding: "6px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "var(--ivory)", outline: "none", fontFamily: "inherit" }}>
-              <option value="">📂 Kein Ordner</option>
-              {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
-            </select>
-            <button className="btn-sm" onClick={() => startWordEdit(w)} title="Bearbeiten">✏️</button>
-            <button className="btn-del" onClick={() => deleteWord(w.id)}>✕</button>
+            {}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", borderTop: "1px solid var(--ivory-dark)", paddingTop: 8 }}>
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <select value={w.folderId || ""} onChange={(e) => moveWord(w, e.target.value)} title="Ordner wechseln"
+                  style={{ flex: "0 1 auto", maxWidth: 200, padding: "6px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "var(--ivory)", outline: "none", fontFamily: "inherit" }}>
+                  <option value="">📂 Kein Ordner</option>
+                  {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+                </select>
+                <button className="btn-sm" onClick={() => startWordEdit(w)} title="Bearbeiten">✏️</button>
+                <button className="btn-del" onClick={() => deleteWord(w.id)}>✕</button>
+              </div>
+            </div>
           </div>
         )}
         {rowMsg && rowMsg.id === w.id && (
