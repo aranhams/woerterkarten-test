@@ -31,7 +31,7 @@ export function StudentsTab({ session }) {
     setBusy(true);
     try {
       const r = await classSync("reset-student-password", { uid: s.uid });
-      setResetInfo({ name: s.username, password: r.password });
+      setResetInfo({ uid: s.uid, password: r.password });
     } catch (e) { flash("⚠ " + (e.message || "Fehler")); }
     finally { setBusy(false); }
   }
@@ -47,17 +47,6 @@ export function StudentsTab({ session }) {
       <h3>👤 Schüler</h3>
       <input placeholder="🔍 Schüler suchen…" value={search} onChange={(e) => setSearch(e.target.value)}
         style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "var(--ivory)", outline: "none", fontFamily: "inherit" }} />
-      {resetInfo && (
-        <div style={{ background: "var(--accent-pale)", border: "1.5px solid var(--accent)", borderRadius: 8, padding: 12, marginTop: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)" }}>Neues Passwort für „{resetInfo.name}"</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
-            <code style={{ fontSize: 17, fontWeight: 700, letterSpacing: 1, background: "white", padding: "4px 10px", borderRadius: 6 }}>{resetInfo.password}</code>
-            <button className="btn-sm" onClick={() => copyText(resetInfo.password)}>📋 Kopieren</button>
-            <button className="btn-sm" onClick={() => setResetInfo(null)}>Schließen</button>
-          </div>
-          <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 6 }}>Gib dieses Passwort dem Schüler. Er kann es später selbst im Menü ändern.</div>
-        </div>
-      )}
       {msg && <p className={msg[0] === "✓" ? "ok" : "err"} style={{ marginTop: 8 }}>{msg}</p>}
     </div>
 
@@ -67,12 +56,25 @@ export function StudentsTab({ session }) {
       {filtered.map((s) => {
         const cls = classNamesOf(s.uid);
         return (
-          <div className="word-item" key={s.uid}>
-            <div className="wi-text">
-              <div className="wi-de">{s.username}</div>
-              <div className="wi-ru">{cls.length ? cls.join(", ") : "Kein Kurs"}</div>
+          <div className="word-item" key={s.uid} style={{ flexDirection: "column", alignItems: "stretch", gap: 9 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div className="wi-text">
+                <div className="wi-de">{s.username}</div>
+                <div className="wi-ru">{cls.length ? cls.join(", ") : "Kein Kurs"}</div>
+              </div>
+              <button className="btn-sm" onClick={() => resetPassword(s)} disabled={busy}>🔑 Passwort</button>
             </div>
-            <button className="btn-sm" onClick={() => resetPassword(s)} disabled={busy}>🔑 Passwort</button>
+            {resetInfo?.uid === s.uid && (
+              <div style={{ background: "var(--accent-pale)", border: "1.5px solid var(--accent)", borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)" }}>Neues Passwort</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                  <code style={{ fontSize: 17, fontWeight: 700, letterSpacing: 1, background: "white", padding: "4px 10px", borderRadius: 6 }}>{resetInfo.password}</code>
+                  <button className="btn-sm" onClick={() => copyText(resetInfo.password)}>📋 Kopieren</button>
+                  <button className="btn-sm" onClick={() => setResetInfo(null)}>Schließen</button>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 6 }}>Gib dieses Passwort dem Schüler. Er kann es später selbst im Menü ändern.</div>
+              </div>
+            )}
           </div>
         );
       })}

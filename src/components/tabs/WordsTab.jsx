@@ -5,10 +5,11 @@ import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, nextDeRev } from "../../lib/word";
 import { effProgress, lvlEmoji } from "../../lib/srs";
 import { translateWord } from "../../lib/api";
-import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders, loadProgress } from "../../data/loaders";
+import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders, loadProgress, loadLangTranslations } from "../../data/loaders";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
+import { WordCardModal } from "../WordCardModal";
 
 function nextReviewText(due) {
   if (!due || Date.now() >= due) return "jetzt fällig";
@@ -30,10 +31,15 @@ export function WordsTab({ session }) {
   const [translating, setTranslating] = useState(false);
   const [edit, setEdit] = useState(null);
   const [editTranslating, setEditTranslating] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [trans, setTrans] = useState({});
 
   useEffect(() => {
     (async () => {
-      const [gw, uw, gf, uf, prog] = await Promise.all([loadVisibleWords(session), loadUserWords(session.uid), loadVisibleFolders(session), loadUserFolders(session.uid), loadProgress(session.uid)]);
+      const [gw, uw, gf, uf, prog, ut] = await Promise.all([loadVisibleWords(session), loadUserWords(session.uid), loadVisibleFolders(session), loadUserFolders(session.uid), loadProgress(session.uid), loadLangTranslations(session.lang)]);
+      const tmap = {};
+      ut.forEach((t) => { tmap[t.id] = { ru: t.ru, example: t.example }; });
+      setTrans(tmap);
       setAllWords([...gw, ...uw]);
       setFolders([...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))]);
       setProgress(prog);
@@ -190,7 +196,7 @@ export function WordsTab({ session }) {
         return (
           <div className="word-item" key={w.id} style={{ flexDirection: "column", alignItems: "stretch", gap: 9 }}>
             {}
-            <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0, cursor: "pointer" }} onClick={() => setPreview(w.id)}>
               {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
               <div className="wi-text">
                 <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
@@ -224,6 +230,16 @@ export function WordsTab({ session }) {
         );
       })}
     </div>
+    {preview && (() => {
+      const pw = allWords.find((w) => w.id === preview);
+      if (!pw) return null;
+      return (
+        <WordCardModal word={pw} folders={folders} session={session} trans={trans}
+          onTranslated={(id, t) => setTrans((prev) => ({ ...prev, [id]: t }))}
+          onSaved={(id, patch) => setAllWords((prev) => prev.map((w) => (w.id === id ? { ...w, ...patch } : w)))}
+          onClose={() => setPreview(null)} />
+      );
+    })()}
     {visible.length > WORD_PAGE && (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
         <button className="btn-sm" onClick={() => setWordPage((p) => Math.max(0, p - 1))} disabled={wPage <= 0}>‹ Zurück</button>

@@ -11,7 +11,6 @@ const REGRESS_WORDS = 3;
 const READY_PCT = 70;
 const CLASS_PAGE = 4;
 
-const ACTIVE_DAYS = 7, WANING_DAYS = 30;
 const RISK_MIN = 25;
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
@@ -265,17 +264,8 @@ export function ProgressTab({ session }) {
   const withFlags = rows.map((r) => ({ r, flags: flagsFor(r) }));
 
   const now = report?.generatedAt || Date.now();
-  const DAY = 86400000;
   const assignedRows = rows.filter((r) => r.assigned > 0);
-  const ageOf = (r) => (r.lastActiveAt == null ? Infinity : now - r.lastActiveAt);
 
-  const eng = { aktiv: 0, nachlassend: 0, inaktiv: 0 };
-  for (const r of assignedRows) {
-    const age = ageOf(r);
-    if (r.started > 0 && age <= ACTIVE_DAYS * DAY) eng.aktiv++;
-    else if (r.started > 0 && age <= WANING_DAYS * DAY) eng.nachlassend++;
-    else eng.inaktiv++;
-  }
   const backlogOf = (r) => Math.max(0, r.due - r.neu);
   const classBacklog = assignedRows.reduce((s, r) => s + backlogOf(r), 0);
   const attention = assignedRows
@@ -411,19 +401,15 @@ export function ProgressTab({ session }) {
         </div>
 
         {}
-        <div className="sec-label">Aktivität</div>
-        <div style={cardBox}>
-          <MiniSegBar segs={[
-            { n: eng.aktiv, color: C.sicher, label: "Aktiv" },
-            { n: eng.nachlassend, color: C.learning, label: "Nachlassend" },
-            { n: eng.inaktiv, color: C.neu, label: "Inaktiv" },
-          ]} />
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10 }}>
-            <LegendDot color={C.sicher} label={`Aktiv (≤${ACTIVE_DAYS} T.)`} n={eng.aktiv} />
-            <LegendDot color={C.learning} label={`Nachlassend (≤${WANING_DAYS} T.)`} n={eng.nachlassend} />
-            <LegendDot color={C.neu} label="Inaktiv / nie" n={eng.inaktiv} />
+        <div className="sec-label" style={{ fontSize: 10, letterSpacing: ".4px" }}>Übungskonstanz</div>
+        {!hasActivity ? (
+          <p style={mutedP}>Übungsdaten werden ab jetzt erfasst — Serien erscheinen, sobald Schüler üben.</p>
+        ) : (
+          <div style={cardBox}>
+            <PracticeStrip practice={practice} totalStudents={assignedRows.length} />
+            {streakLeaders.length > 0 && <StreakLeaders rows={streakLeaders} />}
           </div>
-        </div>
+        )}
         {}
         <div className="sec-label">Braucht Aufmerksamkeit ({attention.length})</div>
         {attention.length === 0 ? (
@@ -445,17 +431,6 @@ export function ProgressTab({ session }) {
             {others.length === 0
               ? <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keine weiteren Schüler.</p>
               : others.map(({ r, flags, risk }) => <StudentRow key={r.uid} r={r} flags={flags} risk={risk} />)}
-          </div>
-        )}
-
-        {}
-        <div className="sec-label">Übungskonstanz</div>
-        {!hasActivity ? (
-          <p style={mutedP}>Übungsdaten werden ab jetzt erfasst — Serien erscheinen, sobald Schüler üben.</p>
-        ) : (
-          <div style={cardBox}>
-            <PracticeStrip practice={practice} totalStudents={assignedRows.length} />
-            {streakLeaders.length > 0 && <StreakLeaders rows={streakLeaders} />}
           </div>
         )}
 
@@ -647,27 +622,6 @@ function Kpi({ label, value, tone }) {
     <div style={{ flex: 1, background: "var(--ivory)", borderRadius: 8, padding: "8px 10px", textAlign: "center", minWidth: 0 }}>
       <div style={{ fontSize: 18, fontWeight: 800, color: tone || "var(--ink)" }}>{value}</div>
       <div style={{ fontSize: 10.5, color: "var(--ink-soft)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</div>
-    </div>
-  );
-}
-
-function LegendDot({ color, label, n }) {
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--ink-soft)" }}>
-      <span style={{ width: 10, height: 10, borderRadius: 3, background: color, flexShrink: 0 }} />
-      {label} <b style={{ color: "var(--ink)" }}>{n}</b>
-    </span>
-  );
-}
-
-function MiniSegBar({ segs, height = 14 }) {
-  const total = segs.reduce((s, x) => s + x.n, 0);
-  if (!total) return <div style={{ height, borderRadius: 4, background: "var(--ivory-dark)" }} />;
-  return (
-    <div style={{ display: "flex", gap: 2, height }}>
-      {segs.filter((s) => s.n > 0).map((s) => (
-        <div key={s.label} style={{ flex: s.n, background: s.color, borderRadius: 4 }} title={`${s.label}: ${s.n}`} />
-      ))}
     </div>
   );
 }

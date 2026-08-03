@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { LIMIT, FOLDER_ICONS } from "../../lib/constants";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
-import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders } from "../../data/loaders";
+import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders, loadLangTranslations } from "../../data/loaders";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove } from "../../data/cache";
+import { WordCardModal } from "../WordCardModal";
 
 const FOLDERS_PER_PAGE = 7;
 
@@ -13,10 +14,15 @@ export function FoldersTab({ session }) {
   const [folderSearch, setFolderSearch] = useState(""); const [folderPage, setFolderPage] = useState(0);
   const [allWords, setAllWords] = useState([]); const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [preview, setPreview] = useState(null);
+  const [trans, setTrans] = useState({});
 
   useEffect(() => {
     (async () => {
-      const [gw, uw, gf, uf] = await Promise.all([loadVisibleWords(session), loadUserWords(session.uid), loadVisibleFolders(session), loadUserFolders(session.uid)]);
+      const [gw, uw, gf, uf, ut] = await Promise.all([loadVisibleWords(session), loadUserWords(session.uid), loadVisibleFolders(session), loadUserFolders(session.uid), loadLangTranslations(session.lang)]);
+      const tmap = {};
+      ut.forEach((t) => { tmap[t.id] = { ru: t.ru, example: t.example }; });
+      setTrans(tmap);
       setAllWords([...gw, ...uw]);
       setFolders([...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))]);
       setLoading(false);
@@ -96,7 +102,7 @@ export function FoldersTab({ session }) {
         <div className="word-list" style={{ marginTop: 10 }}>
           {words.length === 0 && <div className="empty" style={{ padding: 20 }}><p>Noch keine Wörter in diesem Ordner.</p></div>}
           {words.map((w) => (
-            <div className="word-item" key={w.id}>
+            <div className="word-item" key={w.id} style={{ cursor: "pointer" }} onClick={() => setPreview(w.id)}>
               {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
               <div className="wi-text">
                 <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
@@ -107,6 +113,16 @@ export function FoldersTab({ session }) {
           ))}
         </div>
       </>);
+    })()}
+    {preview && (() => {
+      const pw = allWords.find((w) => w.id === preview);
+      if (!pw) return null;
+      return (
+        <WordCardModal word={pw} folders={folders} session={session} trans={trans}
+          onTranslated={(id, t) => setTrans((prev) => ({ ...prev, [id]: t }))}
+          onSaved={(id, patch) => setAllWords((prev) => prev.map((w) => (w.id === id ? { ...w, ...patch } : w)))}
+          onClose={() => setPreview(null)} />
+      );
     })()}
   </>);
 }
