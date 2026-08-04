@@ -236,7 +236,6 @@ export function WordsTab({ session }) {
       return (
         <WordCardModal word={pw} folders={folders} session={session} trans={trans}
           onTranslated={(id, t) => setTrans((prev) => ({ ...prev, [id]: t }))}
-          onSaved={(id, patch) => setAllWords((prev) => prev.map((w) => (w.id === id ? { ...w, ...patch } : w)))}
           onClose={() => setPreview(null)} />
       );
     })()}
