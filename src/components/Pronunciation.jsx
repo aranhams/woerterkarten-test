@@ -4,9 +4,8 @@ import { pronState } from "../lib/pron";
 
 let currentAudio = null;
 
-export function Pronunciation({ word }) {
+export function SpokenWord({ word, style }) {
   const [playing, setPlaying] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
   const audioRef = useRef(null);
 
   const state = pronState(word);
@@ -44,37 +43,17 @@ export function Pronunciation({ word }) {
     : !url ? "Keine Aussprachedaten"
     : null;
 
-  return (
-    <div className="pron" onClick={(e) => e.stopPropagation()}>
-      <div className="pron-head">
-        <span className="pron-label">
-          Aussprache
-          <button type="button" className="pron-info-btn" aria-expanded={showInfo}
-            aria-label="Was die Markierung bedeutet" onClick={() => setShowInfo((v) => !v)}>ⓘ</button>
-        </span>
-        <span className="pron-title">Betonung</span>
-      </div>
-
-      <div className="pron-main">
-        <button type="button" className={`pron-play${playing ? " playing" : ""}`} onClick={play}
-          disabled={!url} aria-label={url ? `${word.de} anhören` : "Aussprache nicht verfügbar"}>
-          <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false">
-            <path d="M8 5.5v13l11-6.5z" fill="currentColor" />
-          </svg>
-        </button>
-        <span className="pron-word" translate="no">{p.bet || word.de}</span>
-      </div>
-
-      {hint && <div className="pron-hint">{hint}</div>}
-
-      {showInfo && (
-        <div className="pron-info">
-          Der Strich unter dem Vokal heißt <b>betont und lang</b>, der Punkt darunter
-          <b> betont und kurz</b>.
-          <br />
-          <span className="pron-credit">Betonungsdaten: Wiktionary (CC BY-SA)</span>
-        </div>
-      )}
+  return (<>
+    <div className="fc-word-row">
+      <button type="button" className={`pron-play${playing ? " playing" : ""}`} onClick={play}
+        disabled={!url} aria-label={url ? `${word.de} anhören` : "Aussprache nicht verfügbar"}>
+        <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false">
+          <path d="M8 5.5v13l11-6.5z" fill="currentColor" />
+        </svg>
+      </button>
+      <span className="fc-word" style={style}>{word.de}</span>
+      <span className="pron-spacer" aria-hidden="true" />
     </div>
-  );
+    {hint && <div className="pron-hint">{hint}</div>}
+  </>);
 }

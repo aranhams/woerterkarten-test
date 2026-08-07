@@ -3,7 +3,7 @@ import { LIMIT } from "../lib/constants";
 import { clip, validImageUrl, cldImg } from "../lib/format";
 import { translateWord } from "../lib/api";
 import { usePronunciation } from "../data/usePron";
-import { Pronunciation } from "./Pronunciation";
+import { SpokenWord } from "./Pronunciation";
 
 export function WordCardModal({ word, folders, session, trans, onTranslated, onPron, onClose }) {
   useEffect(() => {
@@ -33,10 +33,9 @@ export function WordCardModal({ word, folders, session, trans, onTranslated, onP
         <button className="btn-del" style={{ position: "absolute", top: 10, right: 10 }} onClick={onClose}>✕</button>
         {w.imageUrl && validImageUrl(w.imageUrl) && <img src={cldImg(w.imageUrl, 600)} className="fc-img" alt="" decoding="async" />}
         {w.article && <div className="fc-article">{w.article}</div>}
-        <div className="fc-word">{w.de}</div>
+        <SpokenWord word={w} />
         <div className="fc-ru">{w.ru || <span style={{ color: "#ccc", fontSize: 14 }}>⏳ Wird übersetzt…</span>}</div>
         {w.example && <div className="fc-example">„{w.example}"</div>}
-        <Pronunciation word={w} />
       </div>
     </div>
   );

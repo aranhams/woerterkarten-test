@@ -8,7 +8,7 @@ import {
   loadProgress, loadLangTranslations, saveOneProgress, recordActivity, cachePron,
 } from "../../data/loaders";
 import { usePronunciation } from "../../data/usePron";
-import { Pronunciation } from "../Pronunciation";
+import { SpokenWord } from "../Pronunciation";
 
 export function LearnTab({ session }) {
   const [revealed, setRevealed] = useState(false);
@@ -134,13 +134,16 @@ export function LearnTab({ session }) {
           {card.imageUrl && validImageUrl(card.imageUrl) && <img src={cldImg(card.imageUrl, 600)} className="fc-img" alt="" decoding="async" />}
           <div className="fc-hint">{front.hint}</div>
           {front.isDE && front.article && <div className="fc-article">{front.article}</div>}
-          <div className="fc-word" style={front.isDE ? {} : { fontFamily: "'Inter',sans-serif", fontSize: 28 }}>{front.word}</div>
+          {front.isDE
+            ? <SpokenWord word={card} />
+            : <div className="fc-word" style={{ fontFamily: "'Inter',sans-serif", fontSize: 28 }}>{front.word}</div>}
           {revealed ? (<>
             {back.isDE && back.article && <div className="fc-article" style={{ marginTop: 10 }}>{back.article}</div>}
-            <div className={back.isDE ? "fc-word" : "fc-ru"} style={back.isDE ? { marginTop: 6, fontSize: 28 } : {}}>{back.word || <span style={{ color: "#ccc", fontSize: 14 }}>⏳ Wird übersetzt…</span>}</div>
+            {back.isDE
+              ? <SpokenWord word={card} style={{ marginTop: 6, fontSize: 28 }} />
+              : <div className="fc-ru">{back.word || <span style={{ color: "#ccc", fontSize: 14 }}>⏳ Wird übersetzt…</span>}</div>}
             {card.example && <div className="fc-example">„{card.example}"</div>}
           </>) : <div className="fc-tap">Tippe, um {direction === "de2ru" ? "die Übersetzung" : "das deutsche Wort"} zu sehen</div>}
-          {(direction === "de2ru" || revealed) && <Pronunciation word={card} />}
         </div>
       </div>
       {revealed && <div className="ans-btns">
