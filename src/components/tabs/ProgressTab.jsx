@@ -114,6 +114,101 @@ function StruggleChart({ hardWords }) {
   </div>;
 }
 
+function PrivateStruggleList({ rows }) {
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-soft)", marginBottom: 3 }}>
+        🔒 Private Wörter
+      </div>
+      <p style={{ fontSize: 11, color: "var(--ink-soft)", marginBottom: 9 }}>
+        Selbst angelegte Wörter der Schüler — zählen nicht zur Kursauswertung.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 5 }}>
+        <span style={{ width: 140, flexShrink: 0, textAlign: "right" }}>Wort</span>
+        <span style={{ flex: 1, minWidth: 0 }}>Schüler:in</span>
+        <span style={{ whiteSpace: "nowrap" }}>Nochmal</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {rows.map((h) => (
+          <div key={`${h.uid}:${h.wordId}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 140, flexShrink: 0, fontSize: 13, textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+              title={`${h.article ? h.article + " " : ""}${h.de}`}>
+              <span title="privat angelegt">🔒 </span>
+              {h.article && <span style={{ color: "var(--accent)", fontStyle: "italic" }}>{h.article} </span>}{h.de}
+            </span>
+            <span style={{ flex: 1, minWidth: 0, display: "flex" }}>
+              <span title={`Schüler:in: ${h.username}`}
+                style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: "var(--sage-pale)", color: "var(--sage)", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                👤 {h.username}
+              </span>
+            </span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.struggle, whiteSpace: "nowrap" }}
+              title={`${h.nm}× „Nochmal" seit dem letzten Erfolg und noch nicht gefestigt${h.lapses ? ` · ${h.lapses}× wieder vergessen` : ""}`}>
+              ↺{h.nm}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PrivateWordsSection({ words, folders }) {
+  const [open, setOpen] = useState(false);
+  let sicher = 0, fastSicher = 0, learning = 0, neu = 0;
+  for (const w of words) {
+    if (w.mastered) sicher++;
+    else if (!w.started) neu++;
+    else if (w.level === 2) fastSicher++;
+    else learning++;
+  }
+  const byFolder = new Map();
+  for (const w of words) {
+    const fid = w.folderId || "__none";
+    if (!byFolder.has(fid)) byFolder.set(fid, []);
+    byFolder.get(fid).push(w);
+  }
+  const entries = [...byFolder.entries()].sort((a, b) => {
+    if (a[0] === "__none") return 1;
+    if (b[0] === "__none") return -1;
+    return (folders[a[0]]?.name || "").localeCompare(folders[b[0]]?.name || "");
+  });
+
+  return (
+    <div style={{ marginTop: 4, paddingTop: 12, borderTop: "1.5px solid var(--ivory-dark)" }}>
+      <button onClick={() => setOpen((o) => !o)} aria-pressed={open}
+        style={{ width: "100%", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left", padding: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            🔒 Eigene Wörter <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>· privat</span>
+          </span>
+          <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{sicher}/{words.length} gefestigt</span>
+          <span style={{ fontSize: 11, color: "var(--ink-soft)", width: 12, textAlign: "center" }}>{open ? "▲" : "▼"}</span>
+        </div>
+        <StateBar sicher={sicher} fastSicher={fastSicher} learning={learning} neu={neu} assigned={words.length} height={8} />
+      </button>
+      {open && (
+        <div style={{ marginTop: 9 }}>
+          <p style={{ fontSize: 11, color: "var(--ink-soft)", marginBottom: 9 }}>
+            Vom Schüler selbst angelegt — zählen nicht zur Kursauswertung.
+          </p>
+          {entries.map(([fid, list]) => {
+            const meta = fid === "__none" ? { name: "Ohne Ordner", icon: "📄" } : (folders[fid] || { name: "Ordner", icon: "📁" });
+            return (
+              <div key={fid} style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-soft)", marginBottom: 4 }}>{meta.icon} {meta.name}</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                  {list.map((w) => <WordChip key={w.wordId} w={w} hard={w.hard} />)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const flagChip = {
   fontSize: 11, padding: "2px 8px", borderRadius: 99, fontWeight: 600,
   background: "var(--red-pale)", color: "var(--red-soft)", whiteSpace: "nowrap",
@@ -240,7 +335,10 @@ export function ProgressTab({ session }) {
     setDetailLoading(uid);
     try {
       const r = await getStudentProgressDetail(classId, uid);
-      setDetails((d) => ({ ...d, [uid]: { words: r.words || [], folders: r.folders || {}, activity: r.activity || {} } }));
+      setDetails((d) => ({ ...d, [uid]: {
+        words: r.words || [], folders: r.folders || {}, activity: r.activity || {},
+        privateWords: r.privateWords || [], privateFolders: r.privateFolders || {},
+      } }));
     } catch (e) {
       setDetails((d) => ({ ...d, [uid]: { error: e.message || "Fehler" } }));
     } finally {
@@ -279,8 +377,11 @@ export function ProgressTab({ session }) {
     .sort((a, b) => (b.risk ?? -1) - (a.risk ?? -1) || a.r.username.localeCompare(b.r.username));
   const otherLabel = attention.length === 0 ? "Alle Schüler" : "Übrige Schüler";
 
-  const totReviews = assignedRows.reduce((s, r) => s + (r.reviews30 || 0), 0);
-  const totCorrect = assignedRows.reduce((s, r) => s + (r.correct30 || 0), 0);
+  // Trefferquote and Übungskonstanz come from meta/activity, which is never
+  // folder-scoped. They are aggregated over the whole roster on purpose: a student
+  // whose folders were unassigned must not take their practice history with them.
+  const totReviews = rows.reduce((s, r) => s + (r.reviews30 || 0), 0);
+  const totCorrect = rows.reduce((s, r) => s + (r.correct30 || 0), 0);
   const classAcc = totReviews >= 10 ? Math.round((totCorrect / totReviews) * 100) : null;
   const trendRows = assignedRows.filter((r) => (r.trendSamples || 0) >= 2 && r.trendDelta != null);
   const classTrend = trendRows.length ? Math.round(trendRows.reduce((s, r) => s + r.trendDelta, 0) / trendRows.length) : null;
@@ -291,9 +392,9 @@ export function ProgressTab({ session }) {
     return { folderId: f.folderId, name: f.name, icon: f.icon, students: f.students.length, pct: assignedSum ? Math.round((sicherSum / assignedSum) * 100) : 0 };
   }).sort((a, b) => a.pct - b.pct);
 
-  const streakLeaders = assignedRows.filter((r) => (r.streak || 0) > 0).sort((a, b) => b.streak - a.streak);
+  const streakLeaders = rows.filter((r) => (r.streak || 0) > 0).sort((a, b) => b.streak - a.streak);
   const practice = agg?.practice;
-  const hasActivity = assignedRows.some((r) => (r.reviews30 || 0) > 0) || streakLeaders.length > 0 || (practice?.days || []).some((d) => d.active > 0);
+  const hasActivity = rows.some((r) => (r.reviews30 || 0) > 0) || streakLeaders.length > 0 || (practice?.days || []).some((d) => d.active > 0);
 
   function StudentRow({ r, flags, badge, risk }) {
     const expanded = expandedUid === r.uid;
@@ -378,19 +479,26 @@ export function ProgressTab({ session }) {
     {report && !reportLoading && (<>
       {}
       <div className="sec-label">Klassenübersicht</div>
-      {!dist || dist.assigned === 0 ? (
-        <div className="empty" style={{ padding: 20 }}>
-          <p>{rows.length === 0 ? "Noch keine Schüler in diesem Kurs." : "Diesem Kurs sind noch keine Wörter zugewiesen — weise im Tab Kurse Ordner oder Wörter zu."}</p>
+      {rows.length === 0 ? (
+        <div className="empty" style={{ padding: 20, marginBottom: 20 }}>
+          <p>Noch keine Schüler in diesem Kurs.</p>
         </div>
-      ) : (<>
+      ) : (
         <div style={{ background: "white", borderRadius: 10, padding: "14px 15px", boxShadow: "0 1px 4px rgba(0,0,0,.06)", marginBottom: 20 }}>
-          <StateBar {...dist} height={16} />
-          <Legend dist={dist} />
-          {classTrend != null && (
-            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 12 }}>
-              Klassentrend <TrendArrow delta={classTrend} samples={2} /> {classTrend > 0 ? `+${classTrend}` : classTrend} Pp
-            </div>
-          )}
+          {!dist || dist.assigned === 0 ? (
+            <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+              Diesem Kurs sind aktuell keine Wörter zugewiesen — weise im Tab Kurse Ordner oder Wörter zu.
+              Trefferquote, Übungskonstanz und schwierige Wörter bleiben erhalten.
+            </p>
+          ) : (<>
+            <StateBar {...dist} height={16} />
+            <Legend dist={dist} />
+            {classTrend != null && (
+              <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 12 }}>
+                Klassentrend <TrendArrow delta={classTrend} samples={2} /> {classTrend > 0 ? `+${classTrend}` : classTrend} Pp
+              </div>
+            )}
+          </>)}
           <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
             <Kpi label="Aktiv · 7 Tage" value={`${agg.activeStudents}/${rows.length}`} />
             <Kpi label="Trefferquote 30 T." value={classAcc == null ? "–" : `${classAcc}%`}
@@ -399,7 +507,9 @@ export function ProgressTab({ session }) {
             <Kpi label="Übt heute" value={practice ? practice.days[practice.days.length - 1].active : "–"} />
           </div>
         </div>
+      )}
 
+      {rows.length > 0 && (<>
         {}
         <div className="sec-label" style={{ fontSize: 10, letterSpacing: ".4px" }}>Übungskonstanz</div>
         {!hasActivity ? (
@@ -462,6 +572,7 @@ export function ProgressTab({ session }) {
         ) : (
           <StruggleChart hardWords={report.hardWords} />
         )}
+        {(report.hardPrivateWords || []).length > 0 && <PrivateStruggleList rows={report.hardPrivateWords} />}
       </>)}
 
       <p style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 22, textAlign: "right" }}>
@@ -480,14 +591,27 @@ function WordChip({ w, hard }) {
   );
 }
 
+function LapseChip({ w }) {
+  return (
+    <span style={{ fontSize: 12, padding: "3px 9px", borderRadius: 99, background: "white", border: "1px solid var(--ivory-dark)", color: "var(--ink)" }}
+      title={`${w.lapses}× seit dem letzten Festigen vergessen${(w.lapsesTotal || 0) > w.lapses ? ` · insgesamt ${w.lapsesTotal}×` : ""}`}>
+      {w.article && <span style={{ color: "var(--accent)", fontStyle: "italic" }}>{w.article} </span>}{w.de}
+      <span style={{ color: C.learning, fontWeight: 700 }}> ↓{w.lapses}</span>
+      {(w.lapsesTotal || 0) > w.lapses && <span style={{ color: "var(--ink-soft)", fontWeight: 600 }}> · insg. {w.lapsesTotal}×</span>}
+    </span>
+  );
+}
+
 function DetailPanel({ data, loading }) {
   const [openFolders, setOpenFolders] = useState(() => new Set());
   const toggleFolder = (fid) => setOpenFolders((prev) => { const n = new Set(prev); n.has(fid) ? n.delete(fid) : n.add(fid); return n; });
   if (loading) return <div style={panelBox}><span style={{ fontSize: 13, color: "var(--ink-soft)" }}>Lädt…</span></div>;
   if (data?.error) return <div style={panelBox}><span className="err">⚠ {data.error}</span></div>;
   if (!data || !Array.isArray(data.words)) return null;
-  const { words, folders = {} } = data;
-  if (words.length === 0) return <div style={panelBox}><span style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keine zugewiesenen Wörter.</span></div>;
+  const { words, folders = {}, privateWords = [], privateFolders = {} } = data;
+  if (words.length === 0 && privateWords.length === 0) {
+    return <div style={panelBox}><span style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keine zugewiesenen Wörter.</span></div>;
+  }
 
   const byFolder = new Map();
   for (const w of words) {
@@ -506,7 +630,9 @@ function DetailPanel({ data, loading }) {
     return (folders[a[0]]?.name || "").localeCompare(folders[b[0]]?.name || "");
   });
 
-  const struggling = words.filter((w) => w.started && !w.mastered && w.level <= 1 && w.hard);
+  const isStruggling = (w) => w.started && !w.mastered && w.level <= 1 && w.hard;
+  const struggling = words.filter(isStruggling);
+  const strugglingPrivate = privateWords.filter(isStruggling);
   const strugByFolder = new Map();
   for (const w of struggling) {
     const fid = w.folderId || "__none";
@@ -520,35 +646,43 @@ function DetailPanel({ data, loading }) {
   });
   const folderMetaOf = (fid) => fid === "__none" ? { name: "Ohne Ordner", icon: "📄" } : (folders[fid] || { name: "Ordner", icon: "📁" });
 
-  const regressed = words.filter((w) => (w.lapses || 0) >= 1).sort((a, b) => b.lapses - a.lapses);
+  const byLapses = (a, b) => b.lapses - a.lapses;
+  const regressed = words.filter((w) => (w.lapses || 0) >= 1).sort(byLapses);
+  const regressedPrivate = privateWords.filter((w) => (w.lapses || 0) >= 1).sort(byLapses);
+  const privateNote = { fontSize: 11, fontWeight: 600, color: "var(--ink-soft)", marginTop: 8, marginBottom: 4 };
 
   return (
     <div style={panelBox}>
       {data.activity && Object.keys(data.activity).length > 0 && <StudentCalendar days={data.activity} />}
       {data.activity && <AccuracySpark days={data.activity} />}
-      {regressed.length > 0 && (
+      {regressed.length + regressedPrivate.length > 0 && (
         <div style={{ marginBottom: 14, padding: "11px 13px", background: "var(--ivory)", borderRadius: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 9 }}>
             <span style={{ width: 9, height: 9, borderRadius: 3, background: C.learning, flexShrink: 0 }} />
-            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ink)" }}>Gelerntes rutscht ab — {regressed.length} {regressed.length === 1 ? "Wort" : "Wörter"}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ink)" }}>
+              Gelerntes rutscht ab — {regressed.length + regressedPrivate.length} {regressed.length + regressedPrivate.length === 1 ? "Wort" : "Wörter"}
+            </span>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-            {regressed.map((w) => (
-              <span key={w.wordId} style={{ fontSize: 12, padding: "3px 9px", borderRadius: 99, background: "white", border: "1px solid var(--ivory-dark)", color: "var(--ink)" }}
-                title={`${w.lapses}× seit dem letzten Festigen vergessen${(w.lapsesTotal || 0) > w.lapses ? ` · insgesamt ${w.lapsesTotal}×` : ""}`}>
-                {w.article && <span style={{ color: "var(--accent)", fontStyle: "italic" }}>{w.article} </span>}{w.de}
-                <span style={{ color: C.learning, fontWeight: 700 }}> ↓{w.lapses}</span>
-                {(w.lapsesTotal || 0) > w.lapses && <span style={{ color: "var(--ink-soft)", fontWeight: 600 }}> · insg. {w.lapsesTotal}×</span>}
-              </span>
-            ))}
-          </div>
+          {regressed.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {regressed.map((w) => <LapseChip key={w.wordId} w={w} />)}
+            </div>
+          )}
+          {regressedPrivate.length > 0 && (<>
+            <div style={privateNote}>🔒 privat</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {regressedPrivate.map((w) => <LapseChip key={w.wordId} w={w} />)}
+            </div>
+          </>)}
         </div>
       )}
-      {struggling.length > 0 && (
+      {struggling.length + strugglingPrivate.length > 0 && (
         <div style={{ marginBottom: 14, padding: "11px 13px", background: "var(--red-pale)", borderRadius: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 9 }}>
             <span style={{ width: 9, height: 9, borderRadius: 3, background: C.struggle, flexShrink: 0 }} />
-            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--red-soft)" }}>Wo es hakt — {struggling.length} {struggling.length === 1 ? "Wort" : "Wörter"}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--red-soft)" }}>
+              Wo es hakt — {struggling.length + strugglingPrivate.length} {struggling.length + strugglingPrivate.length === 1 ? "Wort" : "Wörter"}
+            </span>
           </div>
           {strugEntries.map(([fid, list]) => {
             const meta = folderMetaOf(fid);
@@ -561,7 +695,18 @@ function DetailPanel({ data, loading }) {
               </div>
             );
           })}
+          {strugglingPrivate.length > 0 && (
+            <div style={{ marginBottom: 7 }}>
+              <div style={privateNote}>🔒 Eigene Wörter · privat</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {strugglingPrivate.map((w) => <WordChip key={w.wordId} w={w} hard />)}
+              </div>
+            </div>
+          )}
         </div>
+      )}
+      {words.length === 0 && (
+        <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 4 }}>Keine zugewiesenen Kurswörter.</div>
       )}
       {entries.map(([fid, grp]) => {
         const meta = fid === "__none" ? { name: "Ohne Ordner", icon: "📄" } : (folders[fid] || { name: "Ordner", icon: "📁" });
@@ -611,6 +756,7 @@ function DetailPanel({ data, loading }) {
           </div>
         );
       })}
+      {privateWords.length > 0 && <PrivateWordsSection words={privateWords} folders={privateFolders} />}
     </div>
   );
 }

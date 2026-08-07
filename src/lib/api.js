@@ -57,6 +57,21 @@ export async function translateWord(payload) {
   return res.json();
 }
 
+async function pronounce(payload) {
+  const token = await idToken();
+  const res = await fetch("/api/pronounce", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Aussprache fehlgeschlagen");
+  return data;
+}
+
+export const requestPronunciation = (wordId, scope) => pronounce({ action: "word", wordId, scope });
+export const resyncPronunciation = (wordIds) => pronounce({ action: "resync", wordIds });
+
 export async function claimTeacher(token, code) {
   const res = await fetch("/api/claim-teacher", {
     method: "POST",

@@ -2,8 +2,10 @@ import { useEffect } from "react";
 import { LIMIT } from "../lib/constants";
 import { clip, validImageUrl, cldImg } from "../lib/format";
 import { translateWord } from "../lib/api";
+import { usePronunciation } from "../data/usePron";
+import { Pronunciation } from "./Pronunciation";
 
-export function WordCardModal({ word, folders, session, trans, onTranslated, onClose }) {
+export function WordCardModal({ word, folders, session, trans, onTranslated, onPron, onClose }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -17,6 +19,8 @@ export function WordCardModal({ word, folders, session, trans, onTranslated, onC
     })();
     return () => { cancelled = true; };
   }, [word.id]);
+
+  usePronunciation(word, session, onPron || (() => {}));
 
   const t = word.source === "global" ? trans[word.id] : null;
   const w = t ? { ...word, ru: t.ru, example: t.example || word.example } : word;
@@ -32,6 +36,7 @@ export function WordCardModal({ word, folders, session, trans, onTranslated, onC
         <div className="fc-word">{w.de}</div>
         <div className="fc-ru">{w.ru || <span style={{ color: "#ccc", fontSize: 14 }}>⏳ Wird übersetzt…</span>}</div>
         {w.example && <div className="fc-example">„{w.example}"</div>}
+        <Pronunciation word={w} />
       </div>
     </div>
   );

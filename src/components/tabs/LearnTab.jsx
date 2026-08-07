@@ -5,8 +5,10 @@ import { isDue, nextReview, lvlEmoji, effProgress, MASTERY_LEVEL } from "../../l
 import { translateWord } from "../../lib/api";
 import {
   loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders,
-  loadProgress, loadLangTranslations, saveOneProgress, recordActivity,
+  loadProgress, loadLangTranslations, saveOneProgress, recordActivity, cachePron,
 } from "../../data/loaders";
+import { usePronunciation } from "../../data/usePron";
+import { Pronunciation } from "../Pronunciation";
 
 export function LearnTab({ session }) {
   const [revealed, setRevealed] = useState(false);
@@ -54,6 +56,14 @@ export function LearnTab({ session }) {
   }
 
   useEffect(() => { if (card) ensureTranslation(card); }, [card?.id]);
+
+  function applyPron(wordId, pron) {
+    setAllWords((prev) => prev.map((w) => (w.id === wordId ? { ...w, pron } : w)));
+    const word = allWords.find((w) => w.id === wordId);
+    if (word) cachePron(session, word, pron);
+  }
+
+  usePronunciation(card, session, applyPron);
 
   async function answer(knew) {
     if (!card) return;
@@ -130,6 +140,7 @@ export function LearnTab({ session }) {
             <div className={back.isDE ? "fc-word" : "fc-ru"} style={back.isDE ? { marginTop: 6, fontSize: 28 } : {}}>{back.word || <span style={{ color: "#ccc", fontSize: 14 }}>⏳ Wird übersetzt…</span>}</div>
             {card.example && <div className="fc-example">„{card.example}"</div>}
           </>) : <div className="fc-tap">Tippe, um {direction === "de2ru" ? "die Übersetzung" : "das deutsche Wort"} zu sehen</div>}
+          {(direction === "de2ru" || revealed) && <Pronunciation word={card} />}
         </div>
       </div>
       {revealed && <div className="ans-btns">

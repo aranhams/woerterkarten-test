@@ -11,6 +11,10 @@ export function validImageUrl(u) {
   return u == null || /^https:\/\/res\.cloudinary\.com\/[^\s]+$/.test(u);
 }
 
+export function validAudioUrl(u) {
+  return typeof u === "string" && /^https:\/\/res\.cloudinary\.com\/[^\s]+$/.test(u);
+}
+
 export function cldImg(u, w = 400) {
   if (!u || !u.includes("/image/upload/") || /\/image\/upload\/[^/]*(?:f_auto|q_auto|w_\d)/.test(u)) return u;
   return u.replace("/image/upload/", `/image/upload/f_auto,q_auto,c_limit,w_${w}/`);

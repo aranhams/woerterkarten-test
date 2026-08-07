@@ -1,7 +1,7 @@
 import { collection, query, where, increment } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { dbGet, dbSet } from "./db";
-import { cachedGetAll, cachedQuery, cacheHas, cacheGet, cacheSet } from "./cache";
+import { cachedGetAll, cachedQuery, cacheHas, cacheGet, cacheSet, cacheUpdate } from "./cache";
 
 export const loadGlobalWords = () => cachedGetAll("global_words");
 export const loadGlobalFolders = () => cachedGetAll("global_folders");
@@ -60,4 +60,15 @@ export async function loadVisibleWords(session) {
 }
 export async function loadVisibleFolders(session) {
   return session.isTeacher ? await loadGlobalFolders() : await loadClassFolders(session.uid);
+}
+
+// A class word sits under a different cache key for teachers than for students,
+// because they load it through different queries.
+export function wordCacheKey(session, word) {
+  if (word.source !== "global") return `users/${session.uid}/words`;
+  return session.isTeacher ? "global_words" : `class_words:${session.uid}`;
+}
+
+export function cachePron(session, word, pron) {
+  cacheUpdate(wordCacheKey(session, word), word.id, { pron });
 }

@@ -32,19 +32,31 @@ service cloud.firestore {
     }
 
     // Exact allowed key set — nothing else may be written (blocks field injection / doc bloat).
+    // 'pron' is listed so that a client merge-write over a word the server has already
+    // stamped still validates — writing it is a separate gate (see pronUntouched).
     function wordKeysOk(source) {
       let d = request.resource.data;
       return source == 'global'
-        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'updatedAt', 'updatedBy'])
-        : d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'deRev', 'updatedAt', 'updatedBy']);
+        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'updatedAt', 'updatedBy', 'pron'])
+        : d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'deRev', 'updatedAt', 'updatedBy', 'pron']);
+    }
+
+    // Pronunciation data (Worttrennung, IPA, Betonung, Cloudinary audio URL) is written
+    // exclusively by /api/pronounce through the Admin SDK, which bypasses these rules.
+    // No client may introduce or alter it — otherwise a student could point a card at
+    // an arbitrary audio URL.
+    function pronUntouched() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pron']);
     }
 
     function validWordCreate(source) {
-      return wordFieldsOk(source) && wordKeysOk(source);
+      return wordFieldsOk(source) && wordKeysOk(source)
+          && !('pron' in request.resource.data);
     }
 
     function validWordUpdate(source) {
       return wordFieldsOk(source) && wordKeysOk(source)
+          && pronUntouched()
           && request.resource.data.source  == resource.data.source     // immutable
           && request.resource.data.addedBy == resource.data.addedBy;    // immutable
     }
@@ -124,6 +136,11 @@ service cloud.firestore {
     }
 
     match /rate_limits/{doc} { allow read, write: if false; }
+
+    // Shared pronunciation lexicon, keyed by a hash of the German word. Server-only:
+    // every read and write goes through /api/pronounce (Admin SDK). Clients read the
+    // denormalised `pron` map on the word instead.
+    match /pron_lex/{key} { allow read, write: if false; }
 
     // Admin-only server config (the teacher enrollment code). Admin SDK only — every
     // read/write goes through /api/admin, which enforces the admin claim.

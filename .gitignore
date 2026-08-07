@@ -73,3 +73,6 @@ Desktop.ini
 *.swp
 *.swo
 *~
+
+# Betonung-Eval-Rohdaten
+scripts/betonung-eval/last-run*.json

@@ -2,10 +2,10 @@ import { useState, useEffect } from "react";
 import { serverTimestamp } from "firebase/firestore";
 import { LIMIT, WORD_PAGE } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
-import { validateWordInput, nextDeRev } from "../../lib/word";
+import { validateWordInput, germanChanged, nextDeRev } from "../../lib/word";
 import { effProgress, lvlEmoji } from "../../lib/srs";
-import { translateWord } from "../../lib/api";
-import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders, loadProgress, loadLangTranslations } from "../../data/loaders";
+import { translateWord, requestPronunciation } from "../../lib/api";
+import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders, loadProgress, loadLangTranslations, cachePron } from "../../data/loaders";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
@@ -60,6 +60,12 @@ export function WordsTab({ session }) {
     setTranslating(false);
   }
 
+  function applyPron(wordId, pron) {
+    setAllWords((prev) => prev.map((w) => (w.id === wordId ? { ...w, pron } : w)));
+    const word = allWords.find((w) => w.id === wordId);
+    if (word) cachePron(session, word, pron);
+  }
+
   async function addWord() {
     if (!de.trim() || !ru.trim()) return;
     if (imageUrl && !validImageUrl(imageUrl)) { alert("Ungültige Bild-URL."); return; }
@@ -74,6 +80,7 @@ export function WordsTab({ session }) {
       cachePush(`users/${session.uid}/words`, { ...w, id });
       setAllWords((prev) => [...prev, { ...w, id }]);
       setDe(""); setArticle(""); setRu(""); setExample(""); setFolderId(""); setImageUrl("");
+      requestPronunciation(id, "personal").catch(() => {});
     } catch { alert("Speichern fehlgeschlagen."); }
   }
 
@@ -104,6 +111,7 @@ export function WordsTab({ session }) {
     if (!word) return;
     const res = validateWordInput(edit, { requireRu: true });
     if (!res.ok) { alert(res.error); return; }
+    const changedDe = germanChanged(word, res.clean);
     const patch = { ...res.clean, folderId: edit.folderId || null, deRev: nextDeRev(word, res.clean), updatedAt: serverTimestamp(), updatedBy: session.uid };
     try {
       await dbSet(`users/${session.uid}/words/${edit.id}`, patch);
@@ -111,6 +119,7 @@ export function WordsTab({ session }) {
       cacheUpdate(`users/${session.uid}/words`, edit.id, localPatch);
       setAllWords((prev) => prev.map((w) => (w.id === edit.id ? { ...w, ...localPatch } : w)));
       setEdit(null);
+      if (changedDe) requestPronunciation(edit.id, "personal").catch(() => {});
     } catch { alert("Speichern fehlgeschlagen."); }
   }
 
@@ -236,6 +245,7 @@ export function WordsTab({ session }) {
       return (
         <WordCardModal word={pw} folders={folders} session={session} trans={trans}
           onTranslated={(id, t) => setTrans((prev) => ({ ...prev, [id]: t }))}
+          onPron={applyPron}
           onClose={() => setPreview(null)} />
       );
     })()}

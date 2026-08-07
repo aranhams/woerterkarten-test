@@ -9,6 +9,8 @@ import { summarizeStudent, summarizeActivity, summarizeTrend, dayKey, effLevel, 
 
 const MAX_FAILS = 40;
 const WINDOW_MS = 15 * 60_000;
+// Per-student cap on how many of their own words a progress report pulls in.
+const PRIVATE_CAP = 500;
 
 const TEACHER_ACTIONS = new Set([
   "create", "rename", "delete", "regen-code",
@@ -321,6 +323,10 @@ async function dispatch({ db, auth, user, action, body, L }) {
         ...roster.map((u) => db.doc(`users/${u}/meta/activity`)),
       ];
       const snaps = n ? await db.getAll(...refs) : [];
+      const personalSnaps = n
+        ? await Promise.all(roster.map((u) =>
+            db.collection(`users/${u}/words`).limit(PRIVATE_CAP).get().catch(() => null)))
+        : [];
 
       const now = Date.now();
       const WEEK_MS = 7 * 86400000;
@@ -330,6 +336,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
       const stripActive = new Array(STRIP_DAYS).fill(0);
       const rows = [];
       const stuckByWord = new Map();
+      const hardPrivate = [];
       const folderRows = new Map();
       for (let i = 0; i < n; i++) {
         const uid = roster[i];
@@ -352,15 +359,33 @@ async function dispatch({ db, auth, user, action, body, L }) {
           trendDelta: trend.delta, trendSamples: trend.samples,
         });
 
+        // Struggle history is keyed off the student's progress, not off what is
+        // assigned right now — otherwise unassigning a folder erases the evidence
+        // that they were struggling with it.
+        for (const [wordId, p] of Object.entries(progressData)) {
+          const w = wordById.get(wordId);
+          if (!w || !p) continue;
+          const rec = stuckByWord.get(wordId) || { stuck: 0, started: 0 };
+          rec.started++;
+          if (isHardFor(w, p)) rec.stuck++;
+          stuckByWord.set(wordId, rec);
+        }
+
+        const personalSnap = personalSnaps[i];
+        for (const d of (personalSnap ? personalSnap.docs : [])) {
+          const w = { id: d.id, ...d.data() };
+          const p = progressData[w.id];
+          if (!isHardFor(w, p)) continue;
+          hardPrivate.push({
+            wordId: w.id, uid, username,
+            de: w.de || "", article: w.article || "",
+            nm: (p && p.nm) || 0, lapses: (p && p.lp) || 0,
+          });
+        }
+
         const perFolder = new Map();
         for (const w of assigned) {
           const p = progressData[w.id];
-          if (p) {
-            const rec = stuckByWord.get(w.id) || { stuck: 0, started: 0 };
-            rec.started++;
-            if (isHardFor(w, p)) rec.stuck++;
-            stuckByWord.set(w.id, rec);
-          }
           if (w.folderId != null) {
             const rec = perFolder.get(w.folderId) || { assigned: 0, sicher: 0 };
             rec.assigned++;
@@ -407,8 +432,12 @@ async function dispatch({ db, auth, user, action, body, L }) {
         .sort((a, b) => b.stuck - a.stuck || (b.stuck / b.started) - (a.stuck / a.started))
         .slice(0, 15);
 
+      const hardPrivateWords = hardPrivate
+        .sort((a, b) => b.nm - a.nm || a.username.localeCompare(b.username))
+        .slice(0, 20);
+
       L.log("info", "class.progress-report", { uid: user.uid, classId: id, rosterSize: rosterAll.length });
-      return { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, readiness };
+      return { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, hardPrivateWords, readiness };
     }
 
     case "student-progress-detail": {
@@ -425,20 +454,25 @@ async function dispatch({ db, auth, user, action, body, L }) {
         .map((d) => ({ id: d.id, ...d.data() }))
         .filter((w) => Array.isArray(w.memberUids) && w.memberUids.includes(uid));
       const folders = Object.fromEntries(foldersSnap.docs.map((d) => [d.id, { name: d.data().name || "Ordner", icon: d.data().icon || "📁" }]));
-      const [snap, actSnap] = await Promise.all([
+      const [snap, actSnap, privWordsSnap, privFoldersSnap] = await Promise.all([
         db.doc(`users/${uid}/meta/progress`).get(),
         db.doc(`users/${uid}/meta/activity`).get(),
+        db.collection(`users/${uid}/words`).limit(PRIVATE_CAP).get(),
+        db.collection(`users/${uid}/folders`).limit(PRIVATE_CAP).get(),
       ]);
       const progressData = (snap.exists ? snap.data()?.data : null) || {};
       const activity = (actSnap.exists ? actSnap.data()?.days : null) || {};
       const now = Date.now();
-      const wordRows = assigned.map((w) => {
+      const rowFor = (w) => {
         const p = progressData[w.id];
         const level = effLevel(w, p);
         return { wordId: w.id, de: w.de || "", article: w.article || "", folderId: w.folderId || null, level, started: !!p, mastered: level >= MASTERY_LEVEL, dueNow: isDueEff(w, p, now), hard: isHardFor(w, p), lapses: (p && p.lp) || 0, lapsesTotal: (p && p.lt) || 0 };
-      });
-      wordRows.sort((a, b) => (a.article + " " + a.de).localeCompare(b.article + " " + b.de));
-      return { words: wordRows, folders, activity };
+      };
+      const byLabel = (a, b) => (a.article + " " + a.de).localeCompare(b.article + " " + b.de);
+      const wordRows = assigned.map(rowFor).sort(byLabel);
+      const privateWords = privWordsSnap.docs.map((d) => rowFor({ id: d.id, ...d.data() })).sort(byLabel);
+      const privateFolders = Object.fromEntries(privFoldersSnap.docs.map((d) => [d.id, { name: d.data().name || "Ordner", icon: d.data().icon || "📁" }]));
+      return { words: wordRows, folders, activity, privateWords, privateFolders };
     }
 
     default:
