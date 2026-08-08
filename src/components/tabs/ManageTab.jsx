@@ -1,16 +1,21 @@
 import { useState, useEffect, useRef } from "react";
-import { serverTimestamp } from "firebase/firestore";
-import { LIMIT, FOLDER_PAGE, WORD_PAGE, FOLDER_ICONS } from "../../lib/constants";
+import { serverTimestamp, writeBatch, doc } from "firebase/firestore";
+import { db } from "../../lib/firebase";
+import { LIMIT, FOLDER_PAGE, FOLDER_ICONS } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
-import { validateWordInput, germanChanged, nextDeRev } from "../../lib/word";
+import { validateWordInput, germanChanged, nextDeRev, searchFields } from "../../lib/word";
 import { classSync, requestPronunciation, resyncPronunciation } from "../../lib/api";
 import { pronState } from "../../lib/pron";
-import { loadGlobalWords, loadGlobalFolders } from "../../data/loaders";
+import { loadGlobalFolders } from "../../data/loaders";
+import { newPageState, loadNextPage } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
 
 const PRON_BATCH = 25;
+const WRITE_BATCH = 450;
+const SEARCH_DEBOUNCE = 350;
+const MIN_QUERY = 2;
 
 export function ManageTab({ session }) {
   const [de, setDe] = useState(""); const [article, setArticle] = useState("");
@@ -18,22 +23,53 @@ export function ManageTab({ session }) {
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
   const [bulk, setBulk] = useState(""); const [msg, setMsg] = useState("");
   const [folderName, setFolderName] = useState(""); const [folderIcon, setFolderIcon] = useState("📁");
-  const [words, setWords] = useState([]); const [folders, setFolders] = useState([]);
+  const [page, setPage] = useState(null); const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [editFolderId, setEditFolderId] = useState(null); const [editFolderName, setEditFolderName] = useState("");
   const [folderSearch, setFolderSearch] = useState(""); const [folderPage, setFolderPage] = useState(0);
-  const [wordSearch, setWordSearch] = useState(""); const [wordPage, setWordPage] = useState(0);
+  const [wordSearch, setWordSearch] = useState("");
   const [wEdit, setWEdit] = useState(null);
   const [rowMsg, setRowMsg] = useState(null);
   const [syncing, setSyncing] = useState(null);
   const cancelSync = useRef(false);
+  const searchTimer = useRef(null);
+  const searchSeq = useRef(0);
+
+  const words = page ? page.rows : [];
 
   useEffect(() => {
     (async () => {
-      const [gw, gf] = await Promise.all([loadGlobalWords(), loadGlobalFolders()]);
-      setWords(gw); setFolders(gf); setLoading(false);
+      const [gf, first] = await Promise.all([
+        loadGlobalFolders(),
+        loadNextPage(newPageState({ uid: session.uid, teacher: true })),
+      ]);
+      setFolders(gf); setPage(first); setLoading(false);
     })();
   }, []);
+
+  async function more() {
+    if (!page || page.exhausted || busy) return;
+    setBusy(true);
+    setPage(await loadNextPage(page));
+    setBusy(false);
+  }
+
+  function onSearchChange(v) {
+    setWordSearch(v);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    const seq = ++searchSeq.current;
+    const q = v.trim();
+    searchTimer.current = setTimeout(async () => {
+      if (q.length > 0 && q.length < MIN_QUERY) return;
+      setBusy(true);
+      const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, q }));
+      if (seq === searchSeq.current) setPage(next);
+      setBusy(false);
+    }, SEARCH_DEBOUNCE);
+  }
+
+  const setWords = (fn) => setPage((p) => (p ? { ...p, rows: typeof fn === "function" ? fn(p.rows) : fn } : p));
 
   function flash(m) { setMsg(m); setTimeout(() => setMsg(""), 2500); }
   function flashRow(id, text) { setRowMsg({ id, text }); setTimeout(() => setRowMsg((r) => (r && r.id === id && r.text === text ? null : r)), 2500); }
@@ -60,11 +96,12 @@ export function ManageTab({ session }) {
     const fid = newFolderId || null;
     if (fid === (w.folderId || null)) return;
     const memberUids = folderMembersFor(fid);
+    const prevMemberUids = Array.isArray(w.memberUids) ? w.memberUids : [];
     try {
       await dbSet(`global_words/${w.id}`, { folderId: fid, memberUids, updatedAt: serverTimestamp(), updatedBy: session.uid });
       const localPatch = { folderId: fid, memberUids, updatedAt: Date.now(), updatedBy: session.uid };
-      cacheUpdate("global_words", w.id, localPatch);
       setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, ...localPatch } : x)));
+      classSync("word-assigned", { wordIds: [w.id], prevMemberUids }).catch(() => {});
       flashRow(w.id, "✓ Wort verschoben");
     } catch { flashRow(w.id, "⚠ Keine Berechtigung."); }
   }
@@ -82,17 +119,23 @@ export function ManageTab({ session }) {
     const changedDe = germanChanged(word, res.clean);
     const fid = wEdit.folderId || null;
     const memberUids = folderMembersFor(fid);
-    const patch = { ...res.clean, folderId: fid, memberUids, deRev: nextDeRev(word, res.clean), updatedAt: serverTimestamp(), updatedBy: session.uid };
+    const patch = {
+      ...res.clean, folderId: fid, memberUids, deRev: nextDeRev(word, res.clean),
+      ...searchFields(res.clean),
+      updatedAt: serverTimestamp(), updatedBy: session.uid,
+    };
     try {
       await dbSet(`global_words/${wEdit.id}`, patch);
       const localPatch = { ...patch, updatedAt: Date.now() };
-      cacheUpdate("global_words", wEdit.id, localPatch);
       setWords((prev) => prev.map((w) => (w.id === wEdit.id ? { ...w, ...localPatch } : w)));
       setWEdit(null);
       flashRow(id, "✓ Wort aktualisiert");
+      const prevMemberUids = Array.isArray(word.memberUids) ? word.memberUids : [];
       if (changedDe) {
-        classSync("word-updated", { wordId: word.id }).catch(() => {});
+        classSync("word-updated", { wordId: word.id, prevMemberUids }).catch(() => {});
         requestPronunciation(word.id, "global").catch(() => {});
+      } else {
+        classSync("word-assigned", { wordIds: [word.id], prevMemberUids }).catch(() => {});
       }
     } catch { flashRow(id, "⚠ Keine Berechtigung."); }
   }
@@ -101,10 +144,11 @@ export function ManageTab({ session }) {
     if (!de.trim()) return;
     if (imageUrl && !validImageUrl(imageUrl)) { flash("⚠ Ungültige Bild-URL."); return; }
     const id = `g_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const w = { de: clip(de.trim(), LIMIT.de), article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId) };
+    const w = { de: clip(de.trim(), LIMIT.de), article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), ...searchFields({ de, ru }) };
     try {
-      await dbSet(`global_words/${id}`, w); cachePush("global_words", { ...w, id }); setWords((prev) => [...prev, { ...w, id }]);
+      await dbSet(`global_words/${id}`, w); setWords((prev) => [...prev, { ...w, id }]);
       setDe(""); setArticle(""); setRu(""); setExample(""); setImageUrl(""); flash("✓ Wort hinzugefügt");
+      classSync("word-assigned", { wordIds: [id] }).catch(() => {});
       requestPronunciation(id, "global").catch(() => {});
     }
     catch { flash("⚠ Keine Berechtigung."); }
@@ -119,20 +163,24 @@ export function ManageTab({ session }) {
       let de_ = parts[0], art_ = "", ru_ = parts[1] || "", ex_ = parts[2] || "";
       const m = de_.match(/^(der|die|das|ein|eine)\s+(.+)$/i);
       if (m) { art_ = m[1]; de_ = m[2]; }
-      newW.push({ de: clip(de_, LIMIT.de), article: cleanArticle(art_), ru: clip(ru_, LIMIT.ru), example: clip(ex_, LIMIT.example), folderId: folderId || null, imageUrl: null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId) });
+      newW.push({ de: clip(de_, LIMIT.de), article: cleanArticle(art_), ru: clip(ru_, LIMIT.ru), example: clip(ex_, LIMIT.example), folderId: folderId || null, imageUrl: null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), ...searchFields({ de: de_, ru: ru_ }) });
     }
     if (!newW.length) { flash("⚠ Format: Wort – Übersetzung"); return; }
-    const added = [];
+    const stamp = Date.now();
+    const rows = newW.map((w, i) => ({ ...w, id: `g_${stamp}_${Math.random().toString(36).slice(2)}_${i}` }));
     try {
-      for (const w of newW) {
-        const id = `g_${Date.now()}_${Math.random().toString(36).slice(2)}_${newW.indexOf(w)}`;
-        await dbSet(`global_words/${id}`, w);
-        cachePush("global_words", { ...w, id });
-        setWords((prev) => [...prev, { ...w, id }]);
-        added.push(id);
+      for (let i = 0; i < rows.length; i += WRITE_BATCH) {
+        const batch = writeBatch(db);
+        for (const r of rows.slice(i, i + WRITE_BATCH)) {
+          const { id, ...data } = r;
+          batch.set(doc(db, "global_words", id), data, { merge: true });
+        }
+        await batch.commit();
       }
-      setBulk(""); flash(`✓ ${newW.length} Wörter hinzugefügt`);
-      syncPron(added, { announce: false });
+      setWords((prev) => [...prev, ...rows]);
+      setBulk(""); flash(`✓ ${rows.length} Wörter hinzugefügt`);
+      classSync("word-assigned", { wordIds: rows.map((r) => r.id) }).catch(() => {});
+      syncPron(rows.map((r) => r.id), { announce: false });
     } catch { flash("⚠ Keine Berechtigung."); }
   }
 
@@ -150,7 +198,6 @@ export function ManageTab({ session }) {
         failed += res.failed || 0;
         const patches = res.results || {};
         setWords((prev) => prev.map((w) => (patches[w.id] ? { ...w, pron: patches[w.id] } : w)));
-        for (const [id, pron] of Object.entries(patches)) if (pron) cacheUpdate("global_words", id, { pron });
       } catch (e) {
         failed += chunk.length;
         if (/Too many|Budget|budget|deaktiviert/.test(e.message || "")) { setSyncing(null); flash(`⚠ ${e.message}`); return; }
@@ -171,11 +218,12 @@ export function ManageTab({ session }) {
   }
 
   async function deleteWord(id) {
+    const word = words.find((w) => w.id === id);
+    const memberUids = Array.isArray(word?.memberUids) ? word.memberUids : [];
     try {
       await dbDelete(`global_words/${id}`);
-      cacheRemove("global_words", id);
       setWords((prev) => prev.filter((w) => w.id !== id));
-      classSync("cleanup", { wordId: id }).catch(() => {});
+      classSync("cleanup", { wordId: id, memberUids }).catch(() => {});
     } catch { flash("⚠ Keine Berechtigung."); }
   }
   async function deleteFolder(id) {
@@ -196,11 +244,7 @@ export function ManageTab({ session }) {
   const pagedFolders = filteredFolders.slice(fPage * FOLDER_PAGE, fPage * FOLDER_PAGE + FOLDER_PAGE);
 
   const pronTodo = words.filter((w) => pronState(w) !== "ready").map((w) => w.id);
-  const wq = wordSearch.trim().toLowerCase();
-  const filteredWords = wq ? words.filter((w) => (w.de || "").toLowerCase().includes(wq) || (w.ru || "").toLowerCase().includes(wq)) : words;
-  const wordPages = Math.max(1, Math.ceil(filteredWords.length / WORD_PAGE));
-  const wPage = Math.min(wordPage, wordPages - 1);
-  const pagedWords = filteredWords.slice(wPage * WORD_PAGE, wPage * WORD_PAGE + WORD_PAGE);
+  const pagedWords = words;
 
   return (<>
     <div className="add-form">
@@ -282,21 +326,19 @@ export function ManageTab({ session }) {
     </div>
 
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-      <div className="sec-label" style={{ margin: 0 }}>Kurswörter ({wq ? `${filteredWords.length} / ` : ""}{words.length})</div>
+      <div className="sec-label" style={{ margin: 0 }}>Kurswörter ({words.length}{page && !page.exhausted ? "+" : ""})</div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button className="btn-sm" onClick={() => syncPron(pronTodo)} disabled={!!syncing || !words.length}
-          title="Worttrennung, Lautschrift und Audio für alle Kurswörter nachladen">
+          title="Worttrennung, Lautschrift und Audio für die geladenen Kurswörter nachladen">
           {syncing ? `🔊 ${syncing.done} / ${syncing.total}` : `🔊 Aussprache synchronisieren${pronTodo.length ? ` (${pronTodo.length})` : ""}`}
         </button>
         {syncing && <button className="btn-sm" onClick={() => { cancelSync.current = true; }}>Abbrechen</button>}
       </div>
-      {words.length > WORD_PAGE && (
-        <input placeholder="🔍 Wörter suchen…" value={wordSearch} onChange={(e) => { setWordSearch(e.target.value); setWordPage(0); }}
-          style={{ flex: "1 1 160px", maxWidth: 260, padding: "8px 11px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit" }} />
-      )}
+      <input placeholder="🔍 Deutsches Wort suchen…" value={wordSearch} onChange={(e) => onSearchChange(e.target.value)}
+        style={{ flex: "1 1 160px", maxWidth: 260, padding: "8px 11px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit" }} />
     </div>
     <div className="word-list">
-      {filteredWords.length === 0 && <div className="empty" style={{ padding: 20 }}><p>{words.length === 0 ? "Noch keine Kurswörter." : "Keine Treffer."}</p></div>}
+      {words.length === 0 && <div className="empty" style={{ padding: 20 }}><p>{busy ? "Lädt…" : wordSearch.trim() ? "Keine Treffer." : "Noch keine Kurswörter."}</p></div>}
       {pagedWords.map((w) => (
         <div key={w.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {wEdit && wEdit.id === w.id ? (
@@ -363,11 +405,9 @@ export function ManageTab({ session }) {
         </div>
       ))}
     </div>
-    {filteredWords.length > WORD_PAGE && (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
-        <button className="btn-sm" onClick={() => setWordPage((p) => Math.max(0, p - 1))} disabled={wPage <= 0}>‹ Zurück</button>
-        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Seite {wPage + 1} / {wordPages}</span>
-        <button className="btn-sm" onClick={() => setWordPage((p) => Math.min(wordPages - 1, p + 1))} disabled={wPage >= wordPages - 1}>Weiter ›</button>
+    {page && !page.exhausted && (
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
+        <button className="btn-sm" onClick={more} disabled={busy}>{busy ? "⏳ Lädt…" : "Mehr laden"}</button>
       </div>
     )}
   </>);

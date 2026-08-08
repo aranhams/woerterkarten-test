@@ -41,38 +41,35 @@ export default async function handler(req, res) {
 
   const wordId = String((req.body && req.body.wordId) || "").trim();
   const cacheable = /^[A-Za-z0-9_-]{1,128}$/.test(wordId) && !!LANG_NAMES[lang];
-  let cacheRef = null;
+  let wordRef = null;
   if (cacheable) {
     try {
       const db = getDb();
-      cacheRef = db.doc(`global_translations/${lang}/words/${wordId}`);
       const gwRef = db.doc(`global_words/${wordId}`);
-      const [cacheSnap, gwSnap] = await db.getAll(cacheRef, gwRef);
-      const norm = (s) => String(s || "").replace(/[ -]/g, " ").trim().slice(0, 90);
-      const gde = gwSnap.exists ? norm(gwSnap.data().de) : "";
-      const cachedDe = cacheSnap.exists ? norm(cacheSnap.data().de) : "";
-      const fresh = cacheSnap.exists && (!gde || cachedDe === gde);
-      if (fresh) {
-        const c = cacheSnap.data();
-        L.done("info", "translate.cache_hit", 200, { uid: user.uid, lang, wordId });
-        return res.status(200).json({
-          translation: String(c.ru || "").slice(0, 200),
-          example: String(c.example || "").slice(0, 300),
-        });
-      }
+      const gwSnap = await gwRef.get();
       if (gwSnap.exists) {
-        if (gde) { word = gde; article = String(gwSnap.data().article || "").replace(/[^A-Za-zÄÖÜäöüß ]/g, "").slice(0, 10).trim(); }
-        if (cacheSnap.exists) L.log("info", "translate.cache_stale", { uid: user.uid, lang, wordId });
-      } else {
-        cacheRef = null;
+        wordRef = gwRef;
+        const data = gwSnap.data();
+        const norm = (s) => String(s || "").replace(/[ -]/g, " ").trim().slice(0, 90);
+        const gde = norm(data.de);
+        const cached = data.t && data.t[lang] ? data.t[lang] : null;
+        if (cached && (!gde || norm(cached.de) === gde)) {
+          L.done("info", "translate.cache_hit", 200, { uid: user.uid, lang, wordId });
+          return res.status(200).json({
+            translation: String(cached.ru || "").slice(0, 200),
+            example: String(cached.example || "").slice(0, 300),
+          });
+        }
+        if (gde) { word = gde; article = String(data.article || "").replace(/[^A-Za-zÄÖÜäöüß ]/g, "").slice(0, 10).trim(); }
+        if (cached) L.log("info", "translate.cache_stale", { uid: user.uid, lang, wordId });
       }
     } catch (e) {
       L.log("error", "translate.cache_lookup_failed", { lang, wordId, err: e?.message });
-      cacheRef = null;
+      wordRef = null;
     }
   }
 
-  const isFreeText = !cacheRef;
+  const isFreeText = !wordRef;
   const dayKey = new Date().toISOString().slice(0, 10);
 
   const rl = await rateLimit(`translate:${user.uid}`, { max: 30, windowMs: 60_000 });
@@ -166,9 +163,9 @@ export default async function handler(req, res) {
     const outTranslation = String(parsed.translation || "").slice(0, 200);
     const outExample = String(parsed.example || "").slice(0, 300);
 
-    if (cacheRef && outTranslation) {
+    if (wordRef && outTranslation) {
       try {
-        await cacheRef.set({ ru: outTranslation, example: outExample, de: word, updatedAt: new Date() }, { merge: true });
+        await wordRef.set({ t: { [lang]: { ru: outTranslation, example: outExample, de: word } } }, { merge: true });
         L.log("info", "translate.cache_write", { uid: user.uid, lang, wordId });
       } catch (e) {
         L.log("error", "translate.cache_write_failed", { uid: user.uid, lang, wordId, err: e?.message });

@@ -36,18 +36,25 @@ function isFresh(word, de) {
   return !!p && p.v === PRON_V && p.de === de && p.st === "ready";
 }
 
-async function processWord(db, ref, L) {
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, "Wort nicht gefunden");
+async function resolveWord(snap) {
+  if (!snap || !snap.exists) throw new HttpError(404, "Wort nicht gefunden");
   const word = snap.data();
   const de = String(word.de || "").normalize("NFC").trim();
   if (!de) throw new HttpError(400, "Wort ohne de");
+  return { word, de };
+}
 
+async function processSnap(db, snap, L, write) {
+  const { word, de } = await resolveWord(snap);
   if (isFresh(word, de)) return { status: "skipped", external: false };
 
   const { pron, external } = await ensurePron(db, de, L);
-  await ref.set({ pron }, { merge: true });
+  await write(snap.ref, pron);
   return { status: pron.st === "ready" ? "done" : "failed", external, pron };
+}
+
+async function processWord(db, ref, L) {
+  return processSnap(db, await ref.get(), L, (r, pron) => r.set({ pron }, { merge: true }));
 }
 
 export default async function handler(req, res) {
@@ -129,11 +136,19 @@ export default async function handler(req, res) {
         return res.status(503).json({ error: "Tagesbudget erreicht" });
       }
 
+      const refs = ids.map((id) => wordRef(db, user, isTeacher, id, "global"));
+      const snaps = await db.getAll(...refs);
+
       const results = {};
+      const pendingWrites = [];
       let done = 0, skipped = 0, failed = 0;
-      for (const id of ids) {
+      for (const snap of snaps) {
+        const id = snap.id;
         try {
-          const out = await processWord(db, wordRef(db, user, isTeacher, id, "global"), L);
+          const out = await processSnap(db, snap, L, (ref, pron) => {
+            pendingWrites.push({ ref, pron });
+            return Promise.resolve();
+          });
           if (out.external) await rateLimit(budgetKey, { max: BUDGET_MAX, windowMs: DAY_MS });
           results[id] = out.pron || null;
           if (out.status === "done") done++;
@@ -143,6 +158,12 @@ export default async function handler(req, res) {
           failed++;
           L.log("warn", "pron.resync_item_failed", { uid: user.uid, wordId: id, err: e?.message });
         }
+      }
+
+      for (let i = 0; i < pendingWrites.length; i += 450) {
+        const batch = db.batch();
+        for (const w of pendingWrites.slice(i, i + 450)) batch.set(w.ref, { pron: w.pron }, { merge: true });
+        await batch.commit();
       }
 
       L.done("info", "pron.resync", 200, { uid: user.uid, done, skipped, failed });

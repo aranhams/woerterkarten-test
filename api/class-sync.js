@@ -2,21 +2,62 @@ import { verifyBearer, applyCors, getAuth, getDb } from "./_firebase.js";
 import { checkLock, registerFailure, clientIp } from "./_ratelimit.js";
 import { requestLogger } from "./_log.js";
 import { FieldValue } from "firebase-admin/firestore";
-import { recomputeDenorm, genUniqueJoinCode, makeCode } from "./_classes.js";
+import { recomputeDenorm, genUniqueJoinCode, makeCode, syncWordManifests, dropFromManifests } from "./_classes.js";
 import { resolveUid } from "./_users.js";
-import { LANG_CODES } from "./_langs.js";
 import { summarizeStudent, summarizeActivity, summarizeTrend, dayKey, effLevel, isDueEff, isHardFor, MASTERY_LEVEL } from "./_progress.js";
 
 const MAX_FAILS = 40;
 const WINDOW_MS = 15 * 60_000;
 // Per-student cap on how many of their own words a progress report pulls in.
 const PRIVATE_CAP = 500;
+const CHUNK = 30;
+const REPORT_TTL_MS = 120_000;
+const ROSTER_TTL_MS = 300_000;
+
+// Best-effort, per serverless instance. A miss just costs the normal read path.
+const reportCache = new Map();
+let rosterCache = null;
+
+const parseUids = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean).slice(0, 500) : []);
+
+const chunks = (arr, n) => {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+};
+
+// Reads only what a class actually assigns, instead of the whole corpus.
+async function loadClassCorpus(db, data) {
+  const folderIds = [...new Set((data.folders || []).map((e) => e && e.folderId).filter(Boolean))];
+  const looseIds = [...new Set((data.wordIds || []).map(String).filter(Boolean))];
+
+  const folders = [];
+  for (const slice of chunks(folderIds, CHUNK)) {
+    const snaps = await db.getAll(...slice.map((id) => db.doc(`global_folders/${id}`)));
+    for (const s of snaps) if (s.exists) folders.push(s);
+  }
+
+  const seen = new Map();
+  for (const slice of chunks(folderIds, CHUNK)) {
+    const snap = await db.collection("global_words").where("folderId", "in", slice).get();
+    for (const d of snap.docs) seen.set(d.id, { id: d.id, ...d.data() });
+  }
+  for (const slice of chunks(looseIds.filter((id) => !seen.has(id)), CHUNK)) {
+    const snaps = await db.getAll(...slice.map((id) => db.doc(`global_words/${id}`)));
+    for (const s of snaps) if (s.exists) seen.set(s.id, { id: s.id, ...s.data() });
+  }
+
+  return {
+    words: [...seen.values()],
+    folderMeta: new Map(folders.map((d) => [d.id, d.data()])),
+  };
+}
 
 const TEACHER_ACTIONS = new Set([
   "create", "rename", "delete", "regen-code",
   "list-students", "add-student", "remove-student", "reset-student-password",
   "set-folders", "set-folder-audience", "release-folder", "set-words",
-  "sync", "cleanup", "word-updated",
+  "sync", "cleanup", "word-updated", "word-assigned",
   "progress-report", "student-progress-detail",
 ]);
 const ADMIN_ACTIONS = new Set(["reset-student-password"]);
@@ -84,6 +125,16 @@ async function dispatch({ db, auth, user, action, body, L }) {
   const classes = db.collection("classes");
   const stamp = () => FieldValue.serverTimestamp();
 
+  const scopeOf = (data, extraFolderIds = [], extraWordIds = []) => ({
+    folderIds: [
+      ...(data?.folders || []).map((e) => e && e.folderId).filter(Boolean),
+      ...extraFolderIds,
+    ],
+    wordIds: [...(data?.wordIds || []).map(String), ...extraWordIds],
+  });
+
+  const invalidateReport = (classId) => { if (classId) reportCache.delete(String(classId)); };
+
   async function loadClass(classId) {
     const id = String(classId || "");
     if (!id) throw new HttpError(400, "classId fehlt");
@@ -122,9 +173,11 @@ async function dispatch({ db, auth, user, action, body, L }) {
     }
 
     case "delete": {
-      const { ref } = await loadClass(body.classId);
+      const { ref, id, data } = await loadClass(body.classId);
+      const scope = scopeOf(data);
       await ref.delete();
-      const { updated } = await recomputeDenorm(db);
+      invalidateReport(id);
+      const { updated } = await recomputeDenorm(db, scope);
       return { stamped: updated };
     }
 
@@ -136,7 +189,11 @@ async function dispatch({ db, auth, user, action, body, L }) {
     }
 
     case "list-students": {
+      if (rosterCache && Date.now() - rosterCache.at < ROSTER_TTL_MS) {
+        return { students: rosterCache.students, cached: true };
+      }
       const students = await listAllStudents(db, auth);
+      rosterCache = { at: Date.now(), students };
       return { students };
     }
 
@@ -152,7 +209,8 @@ async function dispatch({ db, auth, user, action, body, L }) {
         memberNames: FieldValue.delete(),
         updatedAt: stamp(),
       }, { merge: true });
-      await recomputeDenorm(db);
+      invalidateReport(body.classId);
+      await recomputeDenorm(db, scopeOf(data));
       return { uid, name };
     }
 
@@ -172,7 +230,8 @@ async function dispatch({ db, auth, user, action, body, L }) {
         folders,
         updatedAt: stamp(),
       }, { merge: true });
-      await recomputeDenorm(db);
+      invalidateReport(body.classId);
+      await recomputeDenorm(db, scopeOf(data));
       return {};
     }
 
@@ -192,7 +251,8 @@ async function dispatch({ db, auth, user, action, body, L }) {
       const { ref, data } = await loadClass(body.classId);
       const folders = normalizeFolders(body.folders, new Set(data.memberUids || []));
       await ref.set({ folders, updatedAt: stamp() }, { merge: true });
-      await recomputeDenorm(db);
+      invalidateReport(body.classId);
+      await recomputeDenorm(db, scopeOf(data, folders.map((e) => e.folderId)));
       return {};
     }
 
@@ -209,7 +269,8 @@ async function dispatch({ db, auth, user, action, body, L }) {
       const i = folders.findIndex((e) => e && e.folderId === folderId);
       if (i >= 0) folders[i] = entry; else folders.push(entry);
       await ref.set({ folders, updatedAt: stamp() }, { merge: true });
-      await recomputeDenorm(db);
+      invalidateReport(body.classId);
+      await recomputeDenorm(db, scopeOf(data, [folderId]));
       return {};
     }
 
@@ -221,17 +282,19 @@ async function dispatch({ db, auth, user, action, body, L }) {
         e && e.folderId === folderId ? { folderId, audience: "all" } : e
       );
       await ref.set({ folders, updatedAt: stamp() }, { merge: true });
-      await recomputeDenorm(db);
+      invalidateReport(body.classId);
+      await recomputeDenorm(db, scopeOf(data, [folderId]));
       return {};
     }
 
     case "set-words": {
-      const { ref } = await loadClass(body.classId);
+      const { ref, data } = await loadClass(body.classId);
       const wordIds = Array.isArray(body.wordIds)
         ? [...new Set(body.wordIds.map(String))].slice(0, 5000)
         : [];
       await ref.set({ wordIds, updatedAt: stamp() }, { merge: true });
-      await recomputeDenorm(db);
+      invalidateReport(body.classId);
+      await recomputeDenorm(db, scopeOf(data, [], wordIds));
       return {};
     }
 
@@ -254,25 +317,42 @@ async function dispatch({ db, auth, user, action, body, L }) {
           const nw = (data.wordIds || []).filter((w) => w !== wordId);
           if (nw.length !== (data.wordIds || []).length) { upd.wordIds = nw; changed = true; }
         }
-        if (changed) { upd.updatedAt = stamp(); batch.set(d.ref, upd, { merge: true }); touched++; }
+        if (changed) { upd.updatedAt = stamp(); batch.set(d.ref, upd, { merge: true }); touched++; invalidateReport(d.id); }
       }
       if (touched) await batch.commit();
-      const { updated } = await recomputeDenorm(db);
+
+      const scope = folderId ? { folderIds: [folderId], wordIds: [] } : { folderIds: [], wordIds: [wordId] };
+      const { updated } = await recomputeDenorm(db, scope);
+      if (wordId) {
+        const uids = Array.isArray(body.memberUids) ? body.memberUids.map(String).slice(0, 500) : [];
+        await dropFromManifests(db, wordId, uids).catch(() => {});
+      }
       return { touched, stamped: updated };
     }
 
     case "word-updated": {
       const wordId = String(body.wordId || "");
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(wordId)) throw new HttpError(400, "wordId ungültig");
-      const batch = db.batch();
-      for (const lang of LANG_CODES) batch.delete(db.doc(`global_translations/${lang}/words/${wordId}`));
-      await batch.commit();
-      return { invalidated: LANG_CODES.length };
+      await db.doc(`global_words/${wordId}`).set({ t: FieldValue.delete() }, { merge: true });
+      const manifests = await syncWordManifests(db, [wordId], parseUids(body.prevMemberUids)).catch(() => 0);
+      return { invalidated: 1, manifests };
+    }
+
+    // Word create/move/edit stamp memberUids client-side and never reach recomputeDenorm,
+    // so the per-student manifests have to be patched explicitly.
+    case "word-assigned": {
+      const ids = (Array.isArray(body.wordIds) ? body.wordIds : [body.wordId])
+        .filter(Boolean).map(String).filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id)).slice(0, 500);
+      if (!ids.length) throw new HttpError(400, "wordIds fehlt");
+      const manifests = await syncWordManifests(db, ids, parseUids(body.prevMemberUids));
+      return { manifests };
     }
 
     case "sync": {
       const purged = await purgeMemberNames(db);
       const { updated } = await recomputeDenorm(db);
+      reportCache.clear();
+      rosterCache = null;
       return { stamped: updated, purged };
     }
 
@@ -290,23 +370,23 @@ async function dispatch({ db, auth, user, action, body, L }) {
         memberNames: FieldValue.delete(),
         updatedAt: stamp(),
       }, { merge: true });
-      await recomputeDenorm(db);
+      invalidateReport(snap.docs[0].id);
+      await recomputeDenorm(db, scopeOf(data));
       return { classId: snap.docs[0].id, name: data.name };
     }
 
     case "progress-report": {
       const { id, data } = await loadClass(body.classId);
+      const cached = reportCache.get(id);
+      if (body.fresh !== true && cached && Date.now() - cached.at < REPORT_TTL_MS) {
+        return { ...cached.payload, cached: true };
+      }
       const rosterAll = Array.isArray(data.memberUids) ? data.memberUids : [];
       const CAP = 500;
       const truncated = rosterAll.length > CAP;
       const roster = truncated ? rosterAll.slice(0, CAP) : rosterAll;
 
-      const [wordsSnap, foldersSnap] = await Promise.all([
-        db.collection("global_words").get(),
-        db.collection("global_folders").get(),
-      ]);
-      const words = wordsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      const folderMeta = new Map(foldersSnap.docs.map((d) => [d.id, d.data()]));
+      const { words, folderMeta } = await loadClassCorpus(db, data);
       const wordById = new Map(words.map((w) => [w.id, w]));
       const rosterSet = new Set(roster);
       const assignedByUid = new Map(roster.map((u) => [u, []]));
@@ -436,8 +516,10 @@ async function dispatch({ db, auth, user, action, body, L }) {
         .sort((a, b) => b.nm - a.nm || a.username.localeCompare(b.username))
         .slice(0, 20);
 
-      L.log("info", "class.progress-report", { uid: user.uid, classId: id, rosterSize: rosterAll.length });
-      return { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, hardPrivateWords, readiness };
+      L.log("info", "class.progress-report", { uid: user.uid, classId: id, rosterSize: rosterAll.length, words: words.length });
+      const payload = { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, hardPrivateWords, readiness };
+      reportCache.set(id, { at: Date.now(), payload });
+      return payload;
     }
 
     case "student-progress-detail": {
@@ -446,14 +528,9 @@ async function dispatch({ db, auth, user, action, body, L }) {
       if (!uid) throw new HttpError(400, "uid fehlt");
       if (!(Array.isArray(data.memberUids) && data.memberUids.includes(uid))) throw new HttpError(403, "Nicht im Kurs");
 
-      const [wordsSnap, foldersSnap] = await Promise.all([
-        db.collection("global_words").get(),
-        db.collection("global_folders").get(),
-      ]);
-      const assigned = wordsSnap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((w) => Array.isArray(w.memberUids) && w.memberUids.includes(uid));
-      const folders = Object.fromEntries(foldersSnap.docs.map((d) => [d.id, { name: d.data().name || "Ordner", icon: d.data().icon || "📁" }]));
+      const corpus = await loadClassCorpus(db, data);
+      const assigned = corpus.words.filter((w) => Array.isArray(w.memberUids) && w.memberUids.includes(uid));
+      const folders = Object.fromEntries([...corpus.folderMeta].map(([fid, f]) => [fid, { name: f.name || "Ordner", icon: f.icon || "📁" }]));
       const [snap, actSnap, privWordsSnap, privFoldersSnap] = await Promise.all([
         db.doc(`users/${uid}/meta/progress`).get(),
         db.doc(`users/${uid}/meta/activity`).get(),

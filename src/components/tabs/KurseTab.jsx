@@ -1,13 +1,16 @@
 import { useState, useEffect } from "react";
 import { LIMIT, CLASS_ICONS } from "../../lib/constants";
 import { classSync } from "../../lib/api";
-import { loadAllClasses, loadGlobalFolders, loadGlobalWords } from "../../data/loaders";
+import { loadAllClasses, loadGlobalFolders } from "../../data/loaders";
 import { clearDataCache } from "../../data/cache";
+import { newPageState, loadNextPage, searchState } from "../../data/pagination";
 
 export function KurseTab({ session }) {
   const [classes, setClasses] = useState([]);
   const [folders, setFolders] = useState([]);
-  const [words, setWords] = useState([]);
+  const [loose, setLoose] = useState(null);
+  const [looseQuery, setLooseQuery] = useState("");
+  const [looseBusy, setLooseBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -23,12 +26,14 @@ export function KurseTab({ session }) {
 
   async function reload() {
     clearDataCache();
-    const [cs, gf, gw] = await Promise.all([loadAllClasses(), loadGlobalFolders(), loadGlobalWords()]);
-    setClasses(cs); setFolders(gf); setWords(gw);
+    const [cs, gf] = await Promise.all([loadAllClasses(), loadGlobalFolders()]);
+    setClasses(cs); setFolders(gf);
+    setLoose(null); setLooseQuery("");
   }
   useEffect(() => {
     (async () => {
-      await reload();
+      const [cs, gf] = await Promise.all([loadAllClasses(), loadGlobalFolders()]);
+      setClasses(cs); setFolders(gf);
       try { const r = await classSync("list-students"); setRoster(r.students || []); } catch {}
       setLoading(false);
     })();
@@ -36,15 +41,44 @@ export function KurseTab({ session }) {
 
   function flash(m) { setMsg(m); setTimeout(() => setMsg(""), 3000); }
 
+  function patchClass(id, patch) {
+    setClasses((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }
+
+  // Only "sync" reloads: every other action patches local state from what it already
+  // knows, so a Kurse click costs no Firestore reads.
   async function call(action, payload) {
     setBusy(true);
-    try { const r = await classSync(action, payload); await reload(); return r; }
+    try {
+      const r = await classSync(action, payload);
+      if (action === "sync") await reload();
+      return r;
+    }
     catch (e) { flash("⚠ " + (e.message || "Fehler")); throw e; }
     finally { setBusy(false); }
   }
 
   const selected = classes.find((c) => c.id === selectedId) || null;
-  const looseWords = words.filter((w) => !w.folderId);
+
+  async function openLoosePicker(q = "") {
+    setLooseBusy(true);
+    const base = newPageState({ uid: session.uid, teacher: true, looseOnly: true, q });
+    setLoose(await loadNextPage(base));
+    setLooseBusy(false);
+  }
+  async function moreLoose() {
+    if (!loose || loose.exhausted) return;
+    setLooseBusy(true);
+    setLoose(await loadNextPage(loose));
+    setLooseBusy(false);
+  }
+  async function searchLoose(q) {
+    setLooseQuery(q);
+    setLooseBusy(true);
+    const next = loose ? searchState(loose, q) : newPageState({ uid: session.uid, teacher: true, looseOnly: true, q });
+    setLoose(await loadNextPage(next));
+    setLooseBusy(false);
+  }
   const classQuery = classSearch.trim().toLowerCase();
   const filteredClasses = classQuery ? classes.filter((c) => (c.name || "").toLowerCase().includes(classQuery)) : classes;
   const members = selected ? (selected.memberUids || []) : [];
@@ -59,32 +93,54 @@ export function KurseTab({ session }) {
 
   async function createClass() {
     if (!name.trim()) return;
-    try { const r = await call("create", { name: name.trim(), icon }); setSelectedId(r.classId); setRenameVal(name.trim()); setName(""); flash("✓ Kurs erstellt"); } catch {}
+    const nm = name.trim();
+    try {
+      const r = await call("create", { name: nm, icon });
+      setClasses((prev) => [{ id: r.classId, name: nm, icon, joinCode: r.joinCode, memberUids: [], folders: [], wordIds: [], createdAt: Date.now() }, ...prev]);
+      setSelectedId(r.classId); setRenameVal(nm); setName(""); flash("✓ Kurs erstellt");
+    } catch {}
   }
   async function renameClass() {
     if (!selected || !renameVal.trim()) return;
-    try { await call("rename", { classId: selected.id, name: renameVal.trim(), icon: selected.icon }); flash("✓ Umbenannt"); } catch {}
+    const nm = renameVal.trim();
+    try { await call("rename", { classId: selected.id, name: nm, icon: selected.icon }); patchClass(selected.id, { name: nm }); flash("✓ Umbenannt"); } catch {}
   }
   async function deleteClass() {
     if (!selected) return;
     if (!confirm(`Kurs „${selected.name}" wirklich löschen?`)) return;
-    try { await call("delete", { classId: selected.id }); setSelectedId(null); flash("✓ Kurs gelöscht"); } catch {}
+    const id = selected.id;
+    try { await call("delete", { classId: id }); setClasses((prev) => prev.filter((c) => c.id !== id)); setSelectedId(null); flash("✓ Kurs gelöscht"); } catch {}
   }
   async function regenCode() {
     if (!selected) return;
-    try { await call("regen-code", { classId: selected.id }); flash("✓ Neuer Code"); } catch {}
+    try { const r = await call("regen-code", { classId: selected.id }); patchClass(selected.id, { joinCode: r.joinCode }); flash("✓ Neuer Code"); } catch {}
   }
   async function addStudent() {
     if (!selected || !studentName.trim()) return;
-    try { await call("add-student", { classId: selected.id, username: studentName.trim() }); setStudentName(""); flash("✓ Schüler hinzugefügt"); } catch {}
+    try {
+      const r = await call("add-student", { classId: selected.id, username: studentName.trim() });
+      patchClass(selected.id, { memberUids: [...new Set([...(selected.memberUids || []), r.uid])] });
+      if (r.uid && !roster.some((s) => s.uid === r.uid)) setRoster((prev) => [...prev, { uid: r.uid, username: r.name || r.uid.slice(0, 6) }]);
+      setStudentName(""); flash("✓ Schüler hinzugefügt");
+    } catch {}
   }
   async function addStudentByUid(uid) {
     if (!selected) return;
-    try { await call("add-student", { classId: selected.id, uid }); } catch {}
+    try {
+      await call("add-student", { classId: selected.id, uid });
+      patchClass(selected.id, { memberUids: [...new Set([...(selected.memberUids || []), uid])] });
+    } catch {}
   }
   async function removeStudent(uid) {
     if (!selected) return;
-    try { await call("remove-student", { classId: selected.id, uid }); } catch {}
+    try {
+      await call("remove-student", { classId: selected.id, uid });
+      patchClass(selected.id, {
+        memberUids: (selected.memberUids || []).filter((u) => u !== uid),
+        folders: (selected.folders || []).map((e) =>
+          e && e.audience === "selected" ? { ...e, uids: (e.uids || []).filter((u) => u !== uid) } : e),
+      });
+    } catch {}
   }
   async function setFolderState(fid, state) {
     if (!selected) return;
@@ -94,20 +150,26 @@ export function KurseTab({ session }) {
       const prev = (selected.folders || []).find((e) => e.folderId === fid);
       entries.push({ folderId: fid, audience: "selected", uids: prev?.uids || [] });
     }
-    try { await call("set-folders", { classId: selected.id, folders: entries }); } catch {}
+    try { await call("set-folders", { classId: selected.id, folders: entries }); patchClass(selected.id, { folders: entries }); } catch {}
   }
   async function toggleFolderStudent(fid, uid) {
     if (!selected) return;
     const entry = (selected.folders || []).find((e) => e.folderId === fid);
     const cur = new Set(entry?.uids || []);
     if (cur.has(uid)) cur.delete(uid); else cur.add(uid);
-    try { await call("set-folder-audience", { classId: selected.id, folderId: fid, audience: "selected", uids: [...cur] }); } catch {}
+    const next = { folderId: fid, audience: "selected", uids: [...cur] };
+    try {
+      await call("set-folder-audience", { classId: selected.id, folderId: fid, audience: "selected", uids: [...cur] });
+      const folders = (selected.folders || []).filter((e) => e.folderId !== fid);
+      patchClass(selected.id, { folders: [...folders, next] });
+    } catch {}
   }
   async function toggleWord(wid) {
     if (!selected) return;
     const cur = new Set(selected.wordIds || []);
     if (cur.has(wid)) cur.delete(wid); else cur.add(wid);
-    try { await call("set-words", { classId: selected.id, wordIds: [...cur] }); } catch {}
+    const wordIds = [...cur];
+    try { await call("set-words", { classId: selected.id, wordIds }); patchClass(selected.id, { wordIds }); } catch {}
   }
   async function sync() {
     try { const r = await call("sync", {}); flash(`✓ Synchronisiert (${r.stamped} aktualisiert)`); } catch {}
@@ -256,18 +318,35 @@ export function KurseTab({ session }) {
 
       <div className="add-form">
         <div className="sec-label" style={{ marginTop: 0 }}>Einzelne Wörter (ohne Ordner) im Kurs</div>
-        {looseWords.length === 0 && <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keine ordnerlosen Kurswörter.</p>}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {looseWords.map((w) => {
-            const on = (selected.wordIds || []).includes(w.id);
-            return (
-              <button key={w.id} className="btn-sm" onClick={() => toggleWord(w.id)}
-                style={on ? { borderColor: "var(--sage)", color: "var(--sage)", background: "var(--sage-pale)" } : {}}>
-                {on ? "✓ " : ""}{w.article ? w.article + " " : ""}{w.de}
-              </button>
-            );
-          })}
-        </div>
+        {(selected.wordIds || []).length > 0 && (
+          <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8 }}>{(selected.wordIds || []).length} Wörter zugewiesen.</p>
+        )}
+        {!loose ? (
+          <button className="btn-sm" onClick={() => openLoosePicker()} disabled={looseBusy}>
+            {looseBusy ? "⏳ Lädt…" : "Wörter auswählen"}
+          </button>
+        ) : (<>
+          <input placeholder="🔍 Deutsches Wort suchen…" value={looseQuery}
+            onChange={(e) => searchLoose(e.target.value)}
+            style={{ width: "100%", padding: "8px 11px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit", marginBottom: 8 }} />
+          {loose.rows.length === 0 && <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>{looseQuery ? "Keine Treffer." : "Keine ordnerlosen Kurswörter."}</p>}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {loose.rows.map((w) => {
+              const on = (selected.wordIds || []).includes(w.id);
+              return (
+                <button key={w.id} className="btn-sm" onClick={() => toggleWord(w.id)}
+                  style={on ? { borderColor: "var(--sage)", color: "var(--sage)", background: "var(--sage-pale)" } : {}}>
+                  {on ? "✓ " : ""}{w.article ? w.article + " " : ""}{w.de}
+                </button>
+              );
+            })}
+          </div>
+          {!loose.exhausted && (
+            <button className="btn-sm" style={{ marginTop: 8 }} onClick={moreLoose} disabled={looseBusy}>
+              {looseBusy ? "⏳ Lädt…" : "Mehr laden"}
+            </button>
+          )}
+        </>)}
       </div>
     </>)}
   </>);

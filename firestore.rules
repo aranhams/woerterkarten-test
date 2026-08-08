@@ -27,6 +27,8 @@ service cloud.firestore {
           && d.source == source
           && isStr(d.addedBy, 64)
           && (!('deRev' in d)     || d.deRev is int)
+          && (!('deL' in d)       || isStr(d.deL, 100))
+          && (!('ruL' in d)       || isStr(d.ruL, 200))
           && (!('updatedBy' in d) || d.updatedBy == request.auth.uid)   // un-spoofable
           && (!('updatedAt' in d) || d.updatedAt == request.time);       // forces serverTimestamp()
     }
@@ -37,26 +39,28 @@ service cloud.firestore {
     function wordKeysOk(source) {
       let d = request.resource.data;
       return source == 'global'
-        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'updatedAt', 'updatedBy', 'pron'])
-        : d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'deRev', 'updatedAt', 'updatedBy', 'pron']);
+        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron', 't'])
+        : d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron']);
     }
 
-    // Pronunciation data (Worttrennung, IPA, Betonung, Cloudinary audio URL) is written
-    // exclusively by /api/pronounce through the Admin SDK, which bypasses these rules.
-    // No client may introduce or alter it — otherwise a student could point a card at
-    // an arbitrary audio URL.
-    function pronUntouched() {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pron']);
+    // Pronunciation data (Worttrennung, IPA, Betonung, Cloudinary audio URL) and the
+    // embedded translation map `t` are written exclusively by the Admin SDK
+    // (/api/pronounce, /api/translate), which bypasses these rules. No client may
+    // introduce or alter them — otherwise a student could point a card at an arbitrary
+    // audio URL or forge a translation for the whole class.
+    function serverFieldsUntouched() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pron', 't']);
     }
 
     function validWordCreate(source) {
       return wordFieldsOk(source) && wordKeysOk(source)
-          && !('pron' in request.resource.data);
+          && !('pron' in request.resource.data)
+          && !('t' in request.resource.data);
     }
 
     function validWordUpdate(source) {
       return wordFieldsOk(source) && wordKeysOk(source)
-          && pronUntouched()
+          && serverFieldsUntouched()
           && request.resource.data.source  == resource.data.source     // immutable
           && request.resource.data.addedBy == resource.data.addedBy;    // immutable
     }
@@ -105,8 +109,15 @@ service cloud.firestore {
         allow create, update: if isOwner(uid) && validFolder('personal');
         allow delete:         if isOwner(uid);
       }
+      // meta/assigned is the assignment manifest for the due-queue endpoint and is
+      // written only by the Admin SDK (/api/learn-queue, /api/class-sync); a
+      // client-writable manifest would let a student grant themselves any word.
+      // The exclusion lives in this rule on purpose: matching rules are OR-ed, so a
+      // separate `match /meta/assigned { allow write: if false; }` would be overridden
+      // by this one rather than restricting it.
       match /meta/{docId} {
-        allow read, write:    if isOwner(uid);
+        allow read:  if isOwner(uid);
+        allow write: if isOwner(uid) && docId != 'assigned';
       }
     }
 

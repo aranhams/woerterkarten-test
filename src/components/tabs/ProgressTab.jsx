@@ -307,7 +307,7 @@ export function ProgressTab({ session }) {
       setReportLoading(true); setError(""); setReport(null);
       setExpandedUid(null); setDetails({}); setShowAll(false);
       try {
-        const r = await getProgressReport(classId);
+        const r = await getProgressReport(classId, { fresh: refreshKey > 0 });
         if (!cancelled) setReport(r);
       } catch (e) {
         if (!cancelled) setError(e.message || "Bericht konnte nicht geladen werden.");

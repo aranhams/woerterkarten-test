@@ -26,5 +26,5 @@ export async function cachedQuery(key, buildRef) {
     const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     _cache.set(key, rows);
     return rows;
-  } catch { return []; }
+  } catch (err) { console.warn("[db] cachedQuery", key, err); return []; }
 }

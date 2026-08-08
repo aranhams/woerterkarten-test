@@ -32,3 +32,20 @@ export function germanChanged(oldWord, next) {
 export function nextDeRev(oldWord, next) {
   return (oldWord?.deRev || 0) + (germanChanged(oldWord, next) ? 1 : 0);
 }
+
+export const lowerKey = (s) => String(s ?? "").trim().toLowerCase();
+
+export function searchFields({ de, ru }) {
+  return { deL: lowerKey(de), ruL: lowerKey(ru) };
+}
+
+export function embeddedTrans(word, lang) {
+  const t = word && word.t && lang ? word.t[lang] : null;
+  if (!t) return null;
+  return { ru: String(t.ru || ""), example: String(t.example || "") };
+}
+
+export function withTrans(word, lang) {
+  const t = embeddedTrans(word, lang);
+  return t ? { ...word, ru: t.ru, example: t.example || word.example } : word;
+}

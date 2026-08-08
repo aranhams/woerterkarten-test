@@ -3,7 +3,7 @@ import { db } from "../lib/firebase";
 
 export async function dbGet(path) {
   try { const snap = await getDoc(doc(db, ...path.split("/"))); return snap.exists() ? snap.data() : null; }
-  catch { return null; }
+  catch (err) { console.warn("[db] dbGet", path, err); return null; }
 }
 
 export async function dbSet(path, data) {
@@ -12,7 +12,7 @@ export async function dbSet(path, data) {
 
 export async function dbGetAll(col) {
   try { const snap = await getDocs(collection(db, col)); return snap.docs.map((d) => ({ id: d.id, ...d.data() })); }
-  catch { return []; }
+  catch (err) { console.warn("[db] dbGetAll", col, err); return []; }
 }
 
 export async function dbDelete(path) {

@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import { LIMIT, FOLDER_ICONS } from "../../lib/constants";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
-import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders, loadLangTranslations } from "../../data/loaders";
+import { withTrans } from "../../lib/word";
+import { loadVisibleFolders, loadUserFolders } from "../../data/loaders";
+import { newPageState, loadNextPage, countWords } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove } from "../../data/cache";
 import { WordCardModal } from "../WordCardModal";
@@ -12,22 +14,48 @@ export function FoldersTab({ session }) {
   const [name, setName] = useState(""); const [icon, setIcon] = useState("📁");
   const [selected, setSelected] = useState(null);
   const [folderSearch, setFolderSearch] = useState(""); const [folderPage, setFolderPage] = useState(0);
-  const [allWords, setAllWords] = useState([]); const [folders, setFolders] = useState([]);
+  const [folders, setFolders] = useState([]);
+  const [page, setPage] = useState(null);
+  const [counts, setCounts] = useState({});
+  const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState(null);
   const [trans, setTrans] = useState({});
 
   useEffect(() => {
     (async () => {
-      const [gw, uw, gf, uf, ut] = await Promise.all([loadVisibleWords(session), loadUserWords(session.uid), loadVisibleFolders(session), loadUserFolders(session.uid), loadLangTranslations(session.lang)]);
-      const tmap = {};
-      ut.forEach((t) => { tmap[t.id] = { ru: t.ru, example: t.example }; });
-      setTrans(tmap);
-      setAllWords([...gw, ...uw]);
+      const [gf, uf] = await Promise.all([loadVisibleFolders(session), loadUserFolders(session.uid)]);
       setFolders([...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))]);
       setLoading(false);
     })();
   }, []);
+
+  async function openFolder(fid) {
+    setSelected(fid);
+    setPage(null);
+    if (!fid) return;
+    setBusy(true);
+    const folder = folders.find((f) => f.id === fid);
+    const sources = folder?.source === "personal" ? ["personal"] : ["global"];
+    const next = await loadNextPage(newPageState({
+      uid: session.uid, teacher: !!session.isTeacher, folderId: fid, sources,
+    }));
+    setPage(next);
+    setBusy(false);
+    if (counts[fid] === undefined) {
+      const n = await countWords({
+        source: sources[0], uid: session.uid, teacher: !!session.isTeacher, folderId: fid,
+      });
+      setCounts((prev) => ({ ...prev, [fid]: n }));
+    }
+  }
+
+  async function more() {
+    if (!page || page.exhausted || busy) return;
+    setBusy(true);
+    setPage(await loadNextPage(page));
+    setBusy(false);
+  }
 
   async function addFolder() {
     if (!name.trim()) return;
@@ -41,10 +69,9 @@ export function FoldersTab({ session }) {
       await dbDelete(`users/${session.uid}/folders/${fid}`);
       cacheRemove(`users/${session.uid}/folders`, fid);
       setFolders((prev) => prev.filter((f) => f.id !== fid));
-      if (selected === fid) setSelected(null);
+      if (selected === fid) { setSelected(null); setPage(null); }
     } catch { alert("Löschen fehlgeschlagen."); }
   }
-  const wordsInFolder = (fid) => allWords.filter((w) => w.folderId === fid);
   const fq = folderSearch.trim().toLowerCase();
   const filteredFolders = fq ? folders.filter((f) => (f.name || "").toLowerCase().includes(fq)) : folders;
   const folderPages = Math.max(1, Math.ceil(filteredFolders.length / FOLDERS_PER_PAGE));
@@ -69,16 +96,11 @@ export function FoldersTab({ session }) {
         style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit", marginBottom: 10 }} />
     )}
     <div className="folder-grid">
-      <div className={`folder-card all${selected === null ? " active" : ""}`} onClick={() => setSelected(null)}>
-        <div className="folder-icon">📂</div>
-        <div className="folder-name">Alle Wörter</div>
-        <div className="folder-count">{allWords.length} Wörter</div>
-      </div>
       {pagedFolders.map((f) => (
-        <div key={f.id} className={`folder-card${selected === f.id ? " active" : ""}`} onClick={() => setSelected((s) => (s === f.id ? null : f.id))}>
+        <div key={f.id} className={`folder-card${selected === f.id ? " active" : ""}`} onClick={() => openFolder(selected === f.id ? null : f.id)}>
           <div className="folder-icon">{f.icon}</div>
           <div className="folder-name">{f.name}</div>
-          <div className="folder-count">{wordsInFolder(f.id).length} Wörter · {f.source === "global" ? "Kurs" : "Mein"}</div>
+          <div className="folder-count">{counts[f.id] != null ? `${counts[f.id]} Wörter · ` : ""}{f.source === "global" ? "Kurs" : "Mein"}</div>
         </div>
       ))}
     </div>
@@ -92,7 +114,7 @@ export function FoldersTab({ session }) {
     )}
     {selected && (() => {
       const folder = folders.find((f) => f.id === selected);
-      const words = wordsInFolder(selected);
+      const words = (page ? page.rows : []).map((w) => (w.source === "global" ? withTrans(w, session.lang) : w));
       const isOwn = folder?.source === "personal";
       return (<>
         <div className="folder-actions">
@@ -100,7 +122,8 @@ export function FoldersTab({ session }) {
           {isOwn && <button className="btn-sm danger" onClick={() => deleteFolder(selected)}>Löschen</button>}
         </div>
         <div className="word-list" style={{ marginTop: 10 }}>
-          {words.length === 0 && <div className="empty" style={{ padding: 20 }}><p>Noch keine Wörter in diesem Ordner.</p></div>}
+          {!page && <div className="loading" style={{ padding: 20 }}><div className="spinner" /></div>}
+          {page && words.length === 0 && <div className="empty" style={{ padding: 20 }}><p>Noch keine Wörter in diesem Ordner.</p></div>}
           {words.map((w) => (
             <div className="word-item" key={w.id} style={{ cursor: "pointer" }} onClick={() => setPreview(w.id)}>
               {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
@@ -112,10 +135,15 @@ export function FoldersTab({ session }) {
             </div>
           ))}
         </div>
+        {page && !page.exhausted && (
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
+            <button className="btn-sm" onClick={more} disabled={busy}>{busy ? "⏳ Lädt…" : "Mehr laden"}</button>
+          </div>
+        )}
       </>);
     })()}
     {preview && (() => {
-      const pw = allWords.find((w) => w.id === preview);
+      const pw = (page ? page.rows : []).find((w) => w.id === preview);
       if (!pw) return null;
       return (
         <WordCardModal word={pw} folders={folders} session={session} trans={trans}

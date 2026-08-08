@@ -1,15 +1,22 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { serverTimestamp } from "firebase/firestore";
-import { LIMIT, WORD_PAGE } from "../../lib/constants";
+import { LIMIT } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
-import { validateWordInput, germanChanged, nextDeRev } from "../../lib/word";
+import { validateWordInput, germanChanged, nextDeRev, searchFields, withTrans } from "../../lib/word";
 import { effProgress, lvlEmoji } from "../../lib/srs";
 import { translateWord, requestPronunciation } from "../../lib/api";
-import { loadVisibleWords, loadVisibleFolders, loadUserWords, loadUserFolders, loadProgress, loadLangTranslations, cachePron } from "../../data/loaders";
+import {
+  loadVisibleFolders, loadUserFolders, loadUserWords, loadProgress, cachePron,
+  personalSearchFieldsReady, markPersonalSearchFieldsReady, healPersonalSearchFields,
+} from "../../data/loaders";
+import { newPageState, loadNextPage, countWords } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
-import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
+import { cachePush, cacheRemove, cacheUpdate, cacheGet, cacheSet } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
 import { WordCardModal } from "../WordCardModal";
+
+const SEARCH_DEBOUNCE = 350;
+const MIN_QUERY = 2;
 
 function nextReviewText(due) {
   if (!due || Date.now() >= due) return "jetzt fällig";
@@ -24,28 +31,153 @@ export function WordsTab({ session }) {
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
   const [search, setSearch] = useState(""); const [filterFolder, setFilterFolder] = useState("all");
-  const [wordPage, setWordPage] = useState(0);
-  const [allWords, setAllWords] = useState([]); const [folders, setFolders] = useState([]);
+  const [page, setPage] = useState(null);
+  const [legacyPersonal, setLegacyPersonal] = useState(null);
+  const [folders, setFolders] = useState([]);
   const [progress, setProgress] = useState({});
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [edit, setEdit] = useState(null);
   const [editTranslating, setEditTranslating] = useState(false);
   const [preview, setPreview] = useState(null);
   const [trans, setTrans] = useState({});
+  const [counts, setCounts] = useState(null);
+  const searchTimer = useRef(null);
+  const searchSeq = useRef(0);
+
+  // Tabs unmount on switch, so component state is lost. Browsing state is kept in the
+  // module cache and revalidated with two count queries instead of re-reading the page.
+  const pageKey = (fid) => `words_page1:${session.uid}:${fid || "all"}`;
+
+  const countOpts = (fid) => ({
+    uid: session.uid, teacher: !!session.isTeacher,
+    folderId: !fid || fid === "all" ? null : fid,
+  });
+
+  // Always hits the server: validating a cached page against counts derived from that
+  // same page would compare it with itself and never detect drift.
+  async function liveCounts(fid) {
+    const o = countOpts(fid);
+    const [g, p] = await Promise.all([
+      countWords({ source: "global", ...o }),
+      countWords({ source: "personal", ...o }),
+    ]);
+    return { g, p };
+  }
+
+  // Only safe right after a fresh load: an exhausted page is the whole result set.
+  function countsFor(fid, p) {
+    if (p && p.exhausted && !p.q) {
+      return Promise.resolve({
+        g: p.rows.filter((r) => r.source === "global").length,
+        p: p.rows.filter((r) => r.source === "personal").length,
+      });
+    }
+    return liveCounts(fid);
+  }
+
+  const countsMatch = (a, b) => a && b && a.g != null && a.p != null && a.g === b.g && a.p === b.p;
+
+  function basePageState(over = {}) {
+    return newPageState({
+      uid: session.uid,
+      teacher: !!session.isTeacher,
+      folderId: filterFolder === "all" ? null : filterFolder,
+      sources: legacyPersonal ? ["global"] : ["global", "personal"],
+      ...over,
+    });
+  }
 
   useEffect(() => {
     (async () => {
-      const [gw, uw, gf, uf, prog, ut] = await Promise.all([loadVisibleWords(session), loadUserWords(session.uid), loadVisibleFolders(session), loadUserFolders(session.uid), loadProgress(session.uid), loadLangTranslations(session.lang)]);
-      const tmap = {};
-      ut.forEach((t) => { tmap[t.id] = { ru: t.ru, example: t.example }; });
-      setTrans(tmap);
-      setAllWords([...gw, ...uw]);
+      const [gf, uf, prog, ready] = await Promise.all([
+        loadVisibleFolders(session), loadUserFolders(session.uid),
+        loadProgress(session.uid), personalSearchFieldsReady(session.uid),
+      ]);
       setFolders([...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))]);
       setProgress(prog);
+
+      let personal = null;
+      if (!ready) {
+        const uw = (await loadUserWords(session.uid)).map((w) => ({ ...w, source: "personal" }));
+        const healed = await healPersonalSearchFields(session.uid, uw);
+        if (healed) await markPersonalSearchFieldsReady(session.uid);
+        personal = uw;
+        setLegacyPersonal(uw);
+      }
+
+      if (!personal) {
+        const hit = cacheGet(pageKey("all"));
+        if (hit) {
+          const now = await liveCounts("all");
+          if (countsMatch(now, hit.counts)) {
+            setPage(hit.state); setCounts(now); setLoading(false);
+            return;
+          }
+        }
+      }
+
+      const first = await loadNextPage(newPageState({
+        uid: session.uid, teacher: !!session.isTeacher,
+        sources: personal ? ["global"] : ["global", "personal"],
+      }));
+      setPage(first);
+      if (!personal) setCounts(await countsFor("all", first));
       setLoading(false);
     })();
   }, []);
+
+  // Keeps the cached browse state in step with local edits, adds and deletes, so a tab
+  // switch restores what the student last saw rather than a stale page.
+  useEffect(() => {
+    if (!page || page.q || legacyPersonal || !counts) return;
+    cacheSet(pageKey(page.folderId), { state: page, counts });
+  }, [page, counts, legacyPersonal]);
+
+  async function reloadPage(over = {}) {
+    setBusy(true);
+    const next = await loadNextPage(basePageState(over));
+    setPage(next);
+    if (!over.q && !legacyPersonal) setCounts(await countsFor(over.folderId ?? filterFolder, next));
+    setBusy(false);
+  }
+
+  async function more() {
+    if (!page || page.exhausted || busy) return;
+    setBusy(true);
+    setPage(await loadNextPage(page));
+    setBusy(false);
+  }
+
+  function onSearchChange(v) {
+    setSearch(v);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    const seq = ++searchSeq.current;
+    const q = v.trim();
+    searchTimer.current = setTimeout(async () => {
+      if (q.length > 0 && q.length < MIN_QUERY) return;
+      setBusy(true);
+      const next = await loadNextPage(basePageState({ q }));
+      if (seq === searchSeq.current) setPage(next);
+      setBusy(false);
+    }, SEARCH_DEBOUNCE);
+  }
+
+  async function onFolderChange(v) {
+    setFilterFolder(v);
+    const q = search.trim();
+    if (!q && !legacyPersonal) {
+      const hit = cacheGet(pageKey(v));
+      if (hit) {
+        setBusy(true);
+        const now = await liveCounts(v);
+        setBusy(false);
+        if (countsMatch(now, hit.counts)) { setPage(hit.state); setCounts(now); return; }
+      }
+    }
+    reloadPage({ folderId: v === "all" ? null : v, q });
+  }
 
   async function autoTranslate() {
     if (!de.trim()) return;
@@ -60,9 +192,14 @@ export function WordsTab({ session }) {
     setTranslating(false);
   }
 
+  function patchLocal(id, patch) {
+    setPage((p) => (p ? { ...p, rows: p.rows.map((w) => (w.id === id ? { ...w, ...patch } : w)) } : p));
+    setLegacyPersonal((prev) => (prev ? prev.map((w) => (w.id === id ? { ...w, ...patch } : w)) : prev));
+  }
+
   function applyPron(wordId, pron) {
-    setAllWords((prev) => prev.map((w) => (w.id === wordId ? { ...w, pron } : w)));
-    const word = allWords.find((w) => w.id === wordId);
+    patchLocal(wordId, { pron });
+    const word = visible.find((w) => w.id === wordId);
     if (word) cachePron(session, word, pron);
   }
 
@@ -74,11 +211,15 @@ export function WordsTab({ session }) {
       de: clip(de.trim(), LIMIT.de), article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru),
       example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null,
       addedBy: session.uid, source: "personal",
+      ...searchFields({ de: de.trim(), ru: ru.trim() }),
     };
     try {
       await dbSet(`users/${session.uid}/words/${id}`, w);
       cachePush(`users/${session.uid}/words`, { ...w, id });
-      setAllWords((prev) => [...prev, { ...w, id }]);
+      const row = { ...w, id };
+      setPage((p) => (p ? { ...p, rows: [row, ...p.rows] } : p));
+      setLegacyPersonal((prev) => (prev ? [row, ...prev] : prev));
+      setCounts((c) => (c ? { ...c, p: c.p + 1 } : c));
       setDe(""); setArticle(""); setRu(""); setExample(""); setFolderId(""); setImageUrl("");
       requestPronunciation(id, "personal").catch(() => {});
     } catch { alert("Speichern fehlgeschlagen."); }
@@ -88,7 +229,9 @@ export function WordsTab({ session }) {
     try {
       await dbDelete(`users/${session.uid}/words/${word.id}`);
       cacheRemove(`users/${session.uid}/words`, word.id);
-      setAllWords((prev) => prev.filter((w) => w.id !== word.id));
+      setPage((p) => (p ? { ...p, rows: p.rows.filter((w) => w.id !== word.id) } : p));
+      setLegacyPersonal((prev) => (prev ? prev.filter((w) => w.id !== word.id) : prev));
+      setCounts((c) => (c ? { ...c, p: Math.max(0, c.p - 1) } : c));
     } catch { alert("Löschen fehlgeschlagen."); }
   }
 
@@ -107,30 +250,35 @@ export function WordsTab({ session }) {
   }
 
   async function saveEdit() {
-    const word = allWords.find((w) => w.id === edit.id);
+    const word = visible.find((w) => w.id === edit.id);
     if (!word) return;
     const res = validateWordInput(edit, { requireRu: true });
     if (!res.ok) { alert(res.error); return; }
     const changedDe = germanChanged(word, res.clean);
-    const patch = { ...res.clean, folderId: edit.folderId || null, deRev: nextDeRev(word, res.clean), updatedAt: serverTimestamp(), updatedBy: session.uid };
+    const patch = {
+      ...res.clean, folderId: edit.folderId || null, deRev: nextDeRev(word, res.clean),
+      ...searchFields(res.clean),
+      updatedAt: serverTimestamp(), updatedBy: session.uid,
+    };
     try {
       await dbSet(`users/${session.uid}/words/${edit.id}`, patch);
       const localPatch = { ...patch, updatedAt: Date.now() };
       cacheUpdate(`users/${session.uid}/words`, edit.id, localPatch);
-      setAllWords((prev) => prev.map((w) => (w.id === edit.id ? { ...w, ...localPatch } : w)));
+      patchLocal(edit.id, localPatch);
       setEdit(null);
       if (changedDe) requestPronunciation(edit.id, "personal").catch(() => {});
     } catch { alert("Speichern fehlgeschlagen."); }
   }
 
-  const visible = allWords.filter((w) => {
+  const rows = page ? page.rows : [];
+  const q = search.trim().toLowerCase();
+  const legacyRows = (legacyPersonal || []).filter((w) => {
     const mf = filterFolder === "all" || w.folderId === filterFolder;
-    const ms = !search || w.de.toLowerCase().includes(search.toLowerCase()) || w.ru.toLowerCase().includes(search.toLowerCase());
+    const ms = !q || (w.de || "").toLowerCase().startsWith(q);
     return mf && ms;
   });
-  const wordPages = Math.max(1, Math.ceil(visible.length / WORD_PAGE));
-  const wPage = Math.min(wordPage, wordPages - 1);
-  const pagedVisible = visible.slice(wPage * WORD_PAGE, wPage * WORD_PAGE + WORD_PAGE);
+  const visible = [...rows, ...legacyRows]
+    .map((w) => (w.source === "global" ? withTrans(w, session.lang) : w));
   const myFolders = folders.filter((f) => f.source === "personal");
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
@@ -160,16 +308,16 @@ export function WordsTab({ session }) {
       </div>
     </div>
     <div className="filter-bar">
-      <input placeholder="🔍 Suchen…" value={search} onChange={(e) => { setSearch(e.target.value); setWordPage(0); }} />
-      <select value={filterFolder} onChange={(e) => { setFilterFolder(e.target.value); setWordPage(0); }}>
+      <input placeholder="🔍 Deutsches Wort suchen…" value={search} onChange={(e) => onSearchChange(e.target.value)} />
+      <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)}>
         <option value="all">Alle Ordner</option>
         {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
       </select>
     </div>
-    <div className="sec-label">Wörter ({visible.length})</div>
+    <div className="sec-label">Wörter ({visible.length}{page && !page.exhausted ? "+" : ""})</div>
     <div className="word-list">
-      {visible.length === 0 && <div className="empty" style={{ padding: 24 }}><p>Keine Wörter gefunden.</p></div>}
-      {pagedVisible.map((w) => {
+      {visible.length === 0 && <div className="empty" style={{ padding: 24 }}><p>{busy ? "Lädt…" : "Keine Wörter gefunden."}</p></div>}
+      {visible.map((w) => {
         const folder = folders.find((f) => f.id === w.folderId);
         const isOwn = w.source === "personal";
         if (edit && edit.id === w.id) {
@@ -239,8 +387,13 @@ export function WordsTab({ session }) {
         );
       })}
     </div>
+    {page && !page.exhausted && (
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
+        <button className="btn-sm" onClick={more} disabled={busy}>{busy ? "⏳ Lädt…" : "Mehr laden"}</button>
+      </div>
+    )}
     {preview && (() => {
-      const pw = allWords.find((w) => w.id === preview);
+      const pw = visible.find((w) => w.id === preview);
       if (!pw) return null;
       return (
         <WordCardModal word={pw} folders={folders} session={session} trans={trans}
@@ -249,12 +402,5 @@ export function WordsTab({ session }) {
           onClose={() => setPreview(null)} />
       );
     })()}
-    {visible.length > WORD_PAGE && (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
-        <button className="btn-sm" onClick={() => setWordPage((p) => Math.max(0, p - 1))} disabled={wPage <= 0}>‹ Zurück</button>
-        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Seite {wPage + 1} / {wordPages}</span>
-        <button className="btn-sm" onClick={() => setWordPage((p) => Math.min(wordPages - 1, p + 1))} disabled={wPage >= wordPages - 1}>Weiter ›</button>
-      </div>
-    )}
   </>);
 }

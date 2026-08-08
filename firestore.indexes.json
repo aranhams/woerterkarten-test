@@ -1,0 +1,45 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "global_words",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "memberUids", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "deL", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "global_words",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "folderId", "order": "ASCENDING" },
+        { "fieldPath": "deL", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "global_words",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "memberUids", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "folderId", "order": "ASCENDING" },
+        { "fieldPath": "deL", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "words",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "folderId", "order": "ASCENDING" },
+        { "fieldPath": "deL", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    { "collectionGroup": "meta", "fieldPath": "data", "indexes": [] },
+    { "collectionGroup": "meta", "fieldPath": "words", "indexes": [] },
+    { "collectionGroup": "meta", "fieldPath": "days", "indexes": [] },
+    { "collectionGroup": "meta", "fieldPath": "weeks", "indexes": [] },
+    { "collectionGroup": "global_words", "fieldPath": "t", "indexes": [] },
+    { "collectionGroup": "global_words", "fieldPath": "pron", "indexes": [] }
+  ]
+}

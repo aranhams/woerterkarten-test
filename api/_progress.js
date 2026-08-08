@@ -55,6 +55,50 @@ export function summarizeStudent(assignedWords, progressData, now = Date.now()) 
 }
 
 
+export const NEW_PER_SESSION = 30;
+export const CARDS_CAP = 200;
+
+// Picks the cards /api/learn-queue will fetch, and derives the session stats from the
+// manifest alone. Manifest entries are { i: wordId, f: folderId|null, r: deRev }.
+export function selectDueQueue(manifest, progressData, {
+  folderId = null, now = Date.now(),
+  newPerSession = NEW_PER_SESSION, cardsCap = CARDS_CAP,
+} = {}) {
+  const progress = progressData || {};
+  let total = 0, due = 0, learned = 0;
+  const perFolder = {};
+  const candidates = [];
+
+  for (const e of (manifest || [])) {
+    if (!e || !e.i) continue;
+    total++;
+    const key = e.f == null ? "_none" : e.f;
+    const bucket = perFolder[key] || (perFolder[key] = { total: 0, due: 0, learned: 0 });
+    bucket.total++;
+    const p = progress[e.i];
+    const word = { deRev: e.r || 0 };
+    if (effLevel(word, p) >= MASTERY_LEVEL) { learned++; bucket.learned++; }
+    if (!isDueEff(word, p, now)) continue;
+    due++;
+    bucket.due++;
+    if (folderId && e.f !== folderId) continue;
+    candidates.push({ id: e.i, isNew: !p });
+  }
+
+  const picked = [];
+  let newTaken = 0;
+  for (const c of candidates) {
+    if (picked.length >= cardsCap) break;
+    if (c.isNew) {
+      if (newTaken >= newPerSession) continue;
+      newTaken++;
+    }
+    picked.push(c.id);
+  }
+
+  return { picked, capped: picked.length < candidates.length, stats: { total, due, learned, perFolder } };
+}
+
 export const REVIEW_WINDOW_DAYS = 30;
 export const TREND_LOOKBACK_WEEKS = 3;
 

@@ -2,14 +2,17 @@ import { useEffect } from "react";
 import { LIMIT } from "../lib/constants";
 import { clip, validImageUrl, cldImg } from "../lib/format";
 import { translateWord } from "../lib/api";
+import { embeddedTrans } from "../lib/word";
 import { usePronunciation } from "../data/usePron";
 import { SpokenWord } from "./Pronunciation";
 
 export function WordCardModal({ word, folders, session, trans, onTranslated, onPron, onClose }) {
+  const embedded = word.source === "global" ? embeddedTrans(word, session.lang) : null;
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (word.source !== "global" || trans[word.id]) return;
+      if (word.source !== "global" || embedded || trans[word.id]) return;
       try {
         const parsed = await translateWord({ wordId: word.id, word: word.de, article: word.article, lang: session.lang });
         if (!cancelled && parsed.translation) {
@@ -22,7 +25,7 @@ export function WordCardModal({ word, folders, session, trans, onTranslated, onP
 
   usePronunciation(word, session, onPron || (() => {}));
 
-  const t = word.source === "global" ? trans[word.id] : null;
+  const t = word.source === "global" ? (embedded || trans[word.id]) : null;
   const w = t ? { ...word, ru: t.ru, example: t.example || word.example } : word;
   const folder = folders.find((f) => f.id === w.folderId);
 
