@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { serverTimestamp, writeBatch, doc } from "firebase/firestore";
 import { db } from "../../lib/firebase";
-import { LIMIT, FOLDER_PAGE, FOLDER_ICONS } from "../../lib/constants";
+import { LIMIT, FOLDER_PAGE, FOLDER_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields } from "../../lib/word";
 import { classSync, requestPronunciation, resyncPronunciation } from "../../lib/api";
 import { pronState } from "../../lib/pron";
 import { loadGlobalFolders } from "../../data/loaders";
-import { newPageState, loadNextPage } from "../../data/pagination";
+import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
@@ -35,23 +35,28 @@ export function ManageTab({ session }) {
   const cancelSync = useRef(false);
   const searchTimer = useRef(null);
   const searchSeq = useRef(0);
+  const [pageIdx, setPageIdx] = useState(0);
+  const [total, setTotal] = useState(null);
 
   const words = page ? page.rows : [];
 
   useEffect(() => {
     (async () => {
-      const [gf, first] = await Promise.all([
+      const [gf, first, n] = await Promise.all([
         loadGlobalFolders(),
         loadNextPage(newPageState({ uid: session.uid, teacher: true })),
+        countWords({ source: "global", uid: session.uid, teacher: true }),
       ]);
-      setFolders(gf); setPage(first); setLoading(false);
+      setFolders(gf); setPage(first); setTotal(n); setLoading(false);
     })();
   }, []);
 
-  async function more() {
-    if (!page || page.exhausted || busy) return;
+  async function goto(i) {
+    if (!page || busy || i < 0) return;
     setBusy(true);
-    setPage(await loadNextPage(page));
+    const next = await ensureWindow(page, i, WORD_PAGE_SERVER);
+    setPage(next);
+    if (i === 0 || next.rows.length > i * WORD_PAGE_SERVER) setPageIdx(i);
     setBusy(false);
   }
 
@@ -64,7 +69,7 @@ export function ManageTab({ session }) {
       if (q.length > 0 && q.length < MIN_QUERY) return;
       setBusy(true);
       const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, q }));
-      if (seq === searchSeq.current) setPage(next);
+      if (seq === searchSeq.current) { setPage(next); setPageIdx(0); }
       setBusy(false);
     }, SEARCH_DEBOUNCE);
   }
@@ -244,7 +249,10 @@ export function ManageTab({ session }) {
   const pagedFolders = filteredFolders.slice(fPage * FOLDER_PAGE, fPage * FOLDER_PAGE + FOLDER_PAGE);
 
   const pronTodo = words.filter((w) => pronState(w) !== "ready").map((w) => w.id);
-  const pagedWords = words;
+  const searching = !!wordSearch.trim();
+  const pagedWords = windowRows(page, pageIdx, WORD_PAGE_SERVER);
+  const pages = total != null && !searching ? pageCount(total, WORD_PAGE_SERVER) : null;
+  const atLastPage = pages != null ? pageIdx >= pages - 1 : !canGoNext(page, pageIdx, WORD_PAGE_SERVER);
 
   return (<>
     <div className="add-form">
@@ -326,7 +334,7 @@ export function ManageTab({ session }) {
     </div>
 
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-      <div className="sec-label" style={{ margin: 0 }}>Kurswörter ({words.length}{page && !page.exhausted ? "+" : ""})</div>
+      <div className="sec-label" style={{ margin: 0 }}>Kurswörter ({searching ? words.length : (total ?? words.length)})</div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button className="btn-sm" onClick={() => syncPron(pronTodo)} disabled={!!syncing || !words.length}
           title="Worttrennung, Lautschrift und Audio für die geladenen Kurswörter nachladen">
@@ -334,11 +342,11 @@ export function ManageTab({ session }) {
         </button>
         {syncing && <button className="btn-sm" onClick={() => { cancelSync.current = true; }}>Abbrechen</button>}
       </div>
-      <input placeholder="🔍 Deutsches Wort suchen…" value={wordSearch} onChange={(e) => onSearchChange(e.target.value)}
+      <input placeholder="🔍 Wörter suchen…" value={wordSearch} onChange={(e) => onSearchChange(e.target.value)}
         style={{ flex: "1 1 160px", maxWidth: 260, padding: "8px 11px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit" }} />
     </div>
     <div className="word-list">
-      {words.length === 0 && <div className="empty" style={{ padding: 20 }}><p>{busy ? "Lädt…" : wordSearch.trim() ? "Keine Treffer." : "Noch keine Kurswörter."}</p></div>}
+      {pagedWords.length === 0 && <div className="empty" style={{ padding: 20 }}><p>{busy ? "Lädt…" : searching ? "Keine Treffer." : "Noch keine Kurswörter."}</p></div>}
       {pagedWords.map((w) => (
         <div key={w.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {wEdit && wEdit.id === w.id ? (
@@ -405,9 +413,13 @@ export function ManageTab({ session }) {
         </div>
       ))}
     </div>
-    {page && !page.exhausted && (
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
-        <button className="btn-sm" onClick={more} disabled={busy}>{busy ? "⏳ Lädt…" : "Mehr laden"}</button>
+    {(pageIdx > 0 || !atLastPage) && (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
+        <button className="btn-sm" onClick={() => goto(pageIdx - 1)} disabled={busy || pageIdx <= 0}>‹ Zurück</button>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+          {busy ? "⏳ Lädt…" : `Seite ${pageIdx + 1}${pages != null ? ` / ${pages}` : ""}`}
+        </span>
+        <button className="btn-sm" onClick={() => goto(pageIdx + 1)} disabled={busy || atLastPage}>Weiter ›</button>
       </div>
     )}
   </>);

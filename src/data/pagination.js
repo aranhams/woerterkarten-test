@@ -5,7 +5,7 @@ import { db } from "../lib/firebase";
 import { WORD_PAGE_SERVER } from "../lib/constants";
 import { lowerKey } from "../lib/word";
 
-const HIGH = "";
+const HIGH = "\uf8ff";
 
 const baseRef = (source, uid) =>
   (source === "personal" ? collection(db, `users/${uid}/words`) : collection(db, "global_words"));
@@ -84,6 +84,23 @@ export async function loadNextPage(state) {
   if (!out.length) next.exhausted = true;
   return next;
 }
+
+// Classic prev/next paging over the accumulated rows: forward fetches only when the
+// requested window is not loaded yet, backward is always free.
+export async function ensureWindow(state, index, size) {
+  let next = state;
+  const need = (index + 1) * size;
+  while (next.rows.length < need && !next.exhausted) next = await loadNextPage(next);
+  return next;
+}
+
+export const windowRows = (state, index, size) =>
+  (state ? state.rows.slice(index * size, index * size + size) : []);
+
+export const canGoNext = (state, index, size) =>
+  !!state && (state.rows.length > (index + 1) * size || !state.exhausted);
+
+export const pageCount = (total, size) => Math.max(1, Math.ceil((total || 0) / size));
 
 export const searchState = (state, q) => newPageState({
   uid: state.uid, teacher: state.teacher, folderId: state.folderId,

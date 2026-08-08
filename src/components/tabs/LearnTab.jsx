@@ -43,10 +43,22 @@ export function LearnTab({ session }) {
         session.isTeacher ? Promise.resolve({}) : loadProgress(session.uid),
       ]);
       if (cancelled) return;
-      setFolders([...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))]);
+      const list = [...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))];
+      setFolders(list);
       setProgress(prog);
       if (session.isTeacher) {
-        setAllWords([]);
+        // Open on the first folder so the preview shows cards straight away; picking a
+        // folder is a refinement, not a precondition.
+        const first = list[0];
+        if (first) {
+          const page = await fetchFolderCards(first.id);
+          if (cancelled) return;
+          setFilterFolder(first.id);
+          setAllWords(page.rows);
+          setCapped(!page.exhausted);
+        } else {
+          setAllWords([]);
+        }
         setLoading(false);
         return;
       }
@@ -64,14 +76,16 @@ export function LearnTab({ session }) {
     return () => { cancelled = true; };
   }, [session.uid, session.isTeacher]);
 
+  const fetchFolderCards = (fid) => loadNextPage(newPageState({
+    uid: session.uid, teacher: true, folderId: fid, pageSize: CARDS_CAP,
+  }));
+
   async function loadTeacherFolder(fid) {
     setFilterFolder(fid);
     setIdx(0); setRevealed(false); setProgress({});
     if (!fid) { setAllWords([]); return; }
     setLoading(true);
-    const page = await loadNextPage(newPageState({
-      uid: session.uid, teacher: true, folderId: fid, pageSize: CARDS_CAP,
-    }));
+    const page = await fetchFolderCards(fid);
     setAllWords(page.rows);
     setCapped(!page.exhausted);
     setLoading(false);
@@ -214,19 +228,13 @@ export function LearnTab({ session }) {
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
   if (session.isTeacher && !filterFolder) {
-    return (<>
-      <div className="filter-bar">
-        <select value="" onChange={(e) => loadTeacherFolder(e.target.value)}>
-          <option value="">📂 Ordner wählen…</option>
-          {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
-        </select>
-      </div>
+    return (
       <div className="empty">
         <div className="emoji">📂</div>
-        <h3>Vorschau</h3>
-        <p style={{ fontSize: 14 }}>Ordner wählen, um die Karten der Klasse zu sehen.</p>
+        <h3>Noch keine Ordner</h3>
+        <p style={{ fontSize: 14 }}>Erstelle im Tab „Verwalten" einen Ordner mit Wörtern.</p>
       </div>
-    </>);
+    );
   }
 
   return (<>
@@ -242,7 +250,7 @@ export function LearnTab({ session }) {
     </div>}
     {folders.length > 0 && <div className="filter-bar">
       <select value={filterFolder} onChange={(e) => (session.isTeacher ? loadTeacherFolder(e.target.value) : switchStudentFolder(e.target.value))}>
-        {session.isTeacher ? <option value="">📂 Ordner wählen…</option> : <option value="all">📂 Alle Ordner</option>}
+        {!session.isTeacher && <option value="all">📂 Alle Ordner</option>}
         {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
       </select>
     </div>}

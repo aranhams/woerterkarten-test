@@ -1,4 +1,4 @@
-import { collection, query, where, increment } from "firebase/firestore";
+import { collection, query, where, increment, serverTimestamp } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { lowerKey } from "../lib/word";
 import { dbGet, dbSet } from "./db";
@@ -79,11 +79,16 @@ export const flushActivity = () => flushActivityNow();
 export async function healPersonalSearchFields(uid, words) {
   const todo = words.filter((w) => w.deL == null || w.deL !== lowerKey(w.de));
   for (const w of todo) {
-    const patch = { deL: lowerKey(w.de), ruL: lowerKey(w.ru) };
+    // updatedAt/updatedBy must be re-stamped: rules validate the *merged* document, and a
+    // stored updatedAt that is not request.time fails `d.updatedAt == request.time`.
+    const patch = {
+      deL: lowerKey(w.de), ruL: lowerKey(w.ru),
+      updatedAt: serverTimestamp(), updatedBy: uid,
+    };
     try {
       await dbSet(`users/${uid}/words/${w.id}`, patch);
-      Object.assign(w, patch);
-      cacheUpdate(`users/${uid}/words`, w.id, patch);
+      Object.assign(w, { ...patch, updatedAt: Date.now() });
+      cacheUpdate(`users/${uid}/words`, w.id, { ...patch, updatedAt: Date.now() });
     } catch (err) { console.warn("[db] healPersonal", w.id, err); return false; }
   }
   return true;

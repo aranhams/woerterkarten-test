@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { LIMIT, CLASS_ICONS } from "../../lib/constants";
+import { LIMIT, CLASS_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { classSync } from "../../lib/api";
 import { loadAllClasses, loadGlobalFolders } from "../../data/loaders";
 import { clearDataCache } from "../../data/cache";
-import { newPageState, loadNextPage, searchState } from "../../data/pagination";
+import { newPageState, loadNextPage, searchState, ensureWindow, windowRows, canGoNext } from "../../data/pagination";
 
 export function KurseTab({ session }) {
   const [classes, setClasses] = useState([]);
@@ -11,6 +11,7 @@ export function KurseTab({ session }) {
   const [loose, setLoose] = useState(null);
   const [looseQuery, setLooseQuery] = useState("");
   const [looseBusy, setLooseBusy] = useState(false);
+  const [looseIdx, setLooseIdx] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -64,12 +65,15 @@ export function KurseTab({ session }) {
     setLooseBusy(true);
     const base = newPageState({ uid: session.uid, teacher: true, looseOnly: true, q });
     setLoose(await loadNextPage(base));
+    setLooseIdx(0);
     setLooseBusy(false);
   }
-  async function moreLoose() {
-    if (!loose || loose.exhausted) return;
+  async function gotoLoose(i) {
+    if (!loose || looseBusy || i < 0) return;
     setLooseBusy(true);
-    setLoose(await loadNextPage(loose));
+    const next = await ensureWindow(loose, i, WORD_PAGE_SERVER);
+    setLoose(next);
+    if (i === 0 || next.rows.length > i * WORD_PAGE_SERVER) setLooseIdx(i);
     setLooseBusy(false);
   }
   async function searchLoose(q) {
@@ -77,6 +81,7 @@ export function KurseTab({ session }) {
     setLooseBusy(true);
     const next = loose ? searchState(loose, q) : newPageState({ uid: session.uid, teacher: true, looseOnly: true, q });
     setLoose(await loadNextPage(next));
+    setLooseIdx(0);
     setLooseBusy(false);
   }
   const classQuery = classSearch.trim().toLowerCase();
@@ -326,12 +331,12 @@ export function KurseTab({ session }) {
             {looseBusy ? "⏳ Lädt…" : "Wörter auswählen"}
           </button>
         ) : (<>
-          <input placeholder="🔍 Deutsches Wort suchen…" value={looseQuery}
+          <input placeholder="🔍 Wörter suchen…" value={looseQuery}
             onChange={(e) => searchLoose(e.target.value)}
             style={{ width: "100%", padding: "8px 11px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit", marginBottom: 8 }} />
           {loose.rows.length === 0 && <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>{looseQuery ? "Keine Treffer." : "Keine ordnerlosen Kurswörter."}</p>}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {loose.rows.map((w) => {
+            {windowRows(loose, looseIdx, WORD_PAGE_SERVER).map((w) => {
               const on = (selected.wordIds || []).includes(w.id);
               return (
                 <button key={w.id} className="btn-sm" onClick={() => toggleWord(w.id)}
@@ -341,10 +346,12 @@ export function KurseTab({ session }) {
               );
             })}
           </div>
-          {!loose.exhausted && (
-            <button className="btn-sm" style={{ marginTop: 8 }} onClick={moreLoose} disabled={looseBusy}>
-              {looseBusy ? "⏳ Lädt…" : "Mehr laden"}
-            </button>
+          {(looseIdx > 0 || canGoNext(loose, looseIdx, WORD_PAGE_SERVER)) && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 10 }}>
+              <button className="btn-sm" onClick={() => gotoLoose(looseIdx - 1)} disabled={looseBusy || looseIdx <= 0}>‹ Zurück</button>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{looseBusy ? "⏳ Lädt…" : `Seite ${looseIdx + 1}`}</span>
+              <button className="btn-sm" onClick={() => gotoLoose(looseIdx + 1)} disabled={looseBusy || !canGoNext(loose, looseIdx, WORD_PAGE_SERVER)}>Weiter ›</button>
+            </div>
           )}
         </>)}
       </div>

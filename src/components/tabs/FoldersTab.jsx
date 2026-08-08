@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { LIMIT, FOLDER_ICONS } from "../../lib/constants";
+import { LIMIT, FOLDER_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
 import { withTrans } from "../../lib/word";
 import { loadVisibleFolders, loadUserFolders } from "../../data/loaders";
-import { newPageState, loadNextPage, countWords } from "../../data/pagination";
+import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove } from "../../data/cache";
 import { WordCardModal } from "../WordCardModal";
@@ -18,6 +18,7 @@ export function FoldersTab({ session }) {
   const [page, setPage] = useState(null);
   const [counts, setCounts] = useState({});
   const [busy, setBusy] = useState(false);
+  const [wordPageIdx, setWordPageIdx] = useState(0);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState(null);
   const [trans, setTrans] = useState({});
@@ -32,7 +33,7 @@ export function FoldersTab({ session }) {
 
   async function openFolder(fid) {
     setSelected(fid);
-    setPage(null);
+    setPage(null); setWordPageIdx(0);
     if (!fid) return;
     setBusy(true);
     const folder = folders.find((f) => f.id === fid);
@@ -50,10 +51,12 @@ export function FoldersTab({ session }) {
     }
   }
 
-  async function more() {
-    if (!page || page.exhausted || busy) return;
+  async function goto(i) {
+    if (!page || busy || i < 0) return;
     setBusy(true);
-    setPage(await loadNextPage(page));
+    const next = await ensureWindow(page, i, WORD_PAGE_SERVER);
+    setPage(next);
+    if (i === 0 || next.rows.length > i * WORD_PAGE_SERVER) setWordPageIdx(i);
     setBusy(false);
   }
 
@@ -114,7 +117,10 @@ export function FoldersTab({ session }) {
     )}
     {selected && (() => {
       const folder = folders.find((f) => f.id === selected);
-      const words = (page ? page.rows : []).map((w) => (w.source === "global" ? withTrans(w, session.lang) : w));
+      const words = windowRows(page, wordPageIdx, WORD_PAGE_SERVER).map((w) => (w.source === "global" ? withTrans(w, session.lang) : w));
+      const nWords = counts[selected];
+      const wordPages = nWords != null ? pageCount(nWords, WORD_PAGE_SERVER) : null;
+      const atLast = wordPages != null ? wordPageIdx >= wordPages - 1 : !canGoNext(page, wordPageIdx, WORD_PAGE_SERVER);
       const isOwn = folder?.source === "personal";
       return (<>
         <div className="folder-actions">
@@ -135,9 +141,13 @@ export function FoldersTab({ session }) {
             </div>
           ))}
         </div>
-        {page && !page.exhausted && (
-          <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
-            <button className="btn-sm" onClick={more} disabled={busy}>{busy ? "⏳ Lädt…" : "Mehr laden"}</button>
+        {page && (wordPageIdx > 0 || !atLast) && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
+            <button className="btn-sm" onClick={() => goto(wordPageIdx - 1)} disabled={busy || wordPageIdx <= 0}>‹ Zurück</button>
+            <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+              {busy ? "⏳ Lädt…" : `Seite ${wordPageIdx + 1}${wordPages != null ? ` / ${wordPages}` : ""}`}
+            </span>
+            <button className="btn-sm" onClick={() => goto(wordPageIdx + 1)} disabled={busy || atLast}>Weiter ›</button>
           </div>
         )}
       </>);

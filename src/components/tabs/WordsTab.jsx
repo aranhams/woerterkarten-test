@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { serverTimestamp } from "firebase/firestore";
-import { LIMIT } from "../../lib/constants";
+import { LIMIT, WORD_PAGE_SERVER } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields, withTrans } from "../../lib/word";
 import { effProgress, lvlEmoji } from "../../lib/srs";
@@ -9,7 +9,7 @@ import {
   loadVisibleFolders, loadUserFolders, loadUserWords, loadProgress, cachePron,
   personalSearchFieldsReady, markPersonalSearchFieldsReady, healPersonalSearchFields,
 } from "../../data/loaders";
-import { newPageState, loadNextPage, countWords } from "../../data/pagination";
+import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate, cacheGet, cacheSet } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
@@ -43,6 +43,7 @@ export function WordsTab({ session }) {
   const [preview, setPreview] = useState(null);
   const [trans, setTrans] = useState({});
   const [counts, setCounts] = useState(null);
+  const [pageIdx, setPageIdx] = useState(0);
   const searchTimer = useRef(null);
   const searchSeq = useRef(0);
 
@@ -138,15 +139,17 @@ export function WordsTab({ session }) {
   async function reloadPage(over = {}) {
     setBusy(true);
     const next = await loadNextPage(basePageState(over));
-    setPage(next);
+    setPage(next); setPageIdx(0);
     if (!over.q && !legacyPersonal) setCounts(await countsFor(over.folderId ?? filterFolder, next));
     setBusy(false);
   }
 
-  async function more() {
-    if (!page || page.exhausted || busy) return;
+  async function goto(i) {
+    if (!page || busy || i < 0) return;
     setBusy(true);
-    setPage(await loadNextPage(page));
+    const next = await ensureWindow(page, i, WORD_PAGE_SERVER);
+    setPage(next);
+    if (i === 0 || next.rows.length > i * WORD_PAGE_SERVER) setPageIdx(i);
     setBusy(false);
   }
 
@@ -159,7 +162,7 @@ export function WordsTab({ session }) {
       if (q.length > 0 && q.length < MIN_QUERY) return;
       setBusy(true);
       const next = await loadNextPage(basePageState({ q }));
-      if (seq === searchSeq.current) setPage(next);
+      if (seq === searchSeq.current) { setPage(next); setPageIdx(0); }
       setBusy(false);
     }, SEARCH_DEBOUNCE);
   }
@@ -173,7 +176,7 @@ export function WordsTab({ session }) {
         setBusy(true);
         const now = await liveCounts(v);
         setBusy(false);
-        if (countsMatch(now, hit.counts)) { setPage(hit.state); setCounts(now); return; }
+        if (countsMatch(now, hit.counts)) { setPage(hit.state); setCounts(now); setPageIdx(0); return; }
       }
     }
     reloadPage({ folderId: v === "all" ? null : v, q });
@@ -270,15 +273,19 @@ export function WordsTab({ session }) {
     } catch { alert("Speichern fehlgeschlagen."); }
   }
 
-  const rows = page ? page.rows : [];
   const q = search.trim().toLowerCase();
   const legacyRows = (legacyPersonal || []).filter((w) => {
     const mf = filterFolder === "all" || w.folderId === filterFolder;
     const ms = !q || (w.de || "").toLowerCase().startsWith(q);
     return mf && ms;
   });
-  const visible = [...rows, ...legacyRows]
+  // While the legacy personal sweep is active those words are not part of the paged query,
+  // so they ride along on every page rather than being windowed.
+  const visible = [...windowRows(page, pageIdx, WORD_PAGE_SERVER), ...legacyRows]
     .map((w) => (w.source === "global" ? withTrans(w, session.lang) : w));
+  const total = counts && !q ? counts.g + counts.p : null;
+  const pages = total != null ? pageCount(total, WORD_PAGE_SERVER) : null;
+  const atLastPage = pages != null ? pageIdx >= pages - 1 : !canGoNext(page, pageIdx, WORD_PAGE_SERVER);
   const myFolders = folders.filter((f) => f.source === "personal");
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
@@ -308,13 +315,13 @@ export function WordsTab({ session }) {
       </div>
     </div>
     <div className="filter-bar">
-      <input placeholder="🔍 Deutsches Wort suchen…" value={search} onChange={(e) => onSearchChange(e.target.value)} />
+      <input placeholder="🔍 Wörter suchen…" value={search} onChange={(e) => onSearchChange(e.target.value)} />
       <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)}>
         <option value="all">Alle Ordner</option>
         {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
       </select>
     </div>
-    <div className="sec-label">Wörter ({visible.length}{page && !page.exhausted ? "+" : ""})</div>
+    <div className="sec-label">Wörter ({total != null ? total + legacyRows.length : visible.length})</div>
     <div className="word-list">
       {visible.length === 0 && <div className="empty" style={{ padding: 24 }}><p>{busy ? "Lädt…" : "Keine Wörter gefunden."}</p></div>}
       {visible.map((w) => {
@@ -387,9 +394,13 @@ export function WordsTab({ session }) {
         );
       })}
     </div>
-    {page && !page.exhausted && (
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
-        <button className="btn-sm" onClick={more} disabled={busy}>{busy ? "⏳ Lädt…" : "Mehr laden"}</button>
+    {(pageIdx > 0 || !atLastPage) && (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
+        <button className="btn-sm" onClick={() => goto(pageIdx - 1)} disabled={busy || pageIdx <= 0}>‹ Zurück</button>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+          {busy ? "⏳ Lädt…" : `Seite ${pageIdx + 1}${pages != null ? ` / ${pages}` : ""}`}
+        </span>
+        <button className="btn-sm" onClick={() => goto(pageIdx + 1)} disabled={busy || atLastPage}>Weiter ›</button>
       </div>
     )}
     {preview && (() => {
