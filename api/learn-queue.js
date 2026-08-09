@@ -36,28 +36,33 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
+  const body = req.body || {};
+  const folderId = body.folderId ? String(body.folderId).slice(0, 64) : null;
+  const db = getDb();
+
+  const metaP = db.getAll(
+    db.doc(`users/${user.uid}/meta/assigned`),
+    db.doc(`users/${user.uid}/meta/progress`),
+  );
+  metaP.catch(() => {});
+
   const day = new Date().toISOString().slice(0, 10);
-  for (const [scope, key, opts] of [
+  const limits = [
     ["min", `learn:${user.uid}`, { max: 30, windowMs: 60_000 }],
     ["day", `learn:day:${user.uid}:${day}`, { max: 500, windowMs: DAY_MS }],
-  ]) {
-    const r = await rateLimit(key, opts);
+  ];
+  const limited = await Promise.all(limits.map(([, key, opts]) => rateLimit(key, opts)));
+  for (let i = 0; i < limited.length; i++) {
+    const r = limited[i];
     if (r.limited) {
-      L.done("warn", "learn.ratelimited", 429, { uid: user.uid, scope, degraded: r.degraded });
+      L.done("warn", "learn.ratelimited", 429, { uid: user.uid, scope: limits[i][0], degraded: r.degraded });
       res.setHeader("Retry-After", String(r.retryAfterSec));
       return res.status(429).json({ error: "Too many requests" });
     }
   }
 
-  const body = req.body || {};
-  const folderId = body.folderId ? String(body.folderId).slice(0, 64) : null;
-  const db = getDb();
-
   try {
-    const [manifestSnap, progressSnap] = await db.getAll(
-      db.doc(`users/${user.uid}/meta/assigned`),
-      db.doc(`users/${user.uid}/meta/progress`),
-    );
+    const [manifestSnap, progressSnap] = await metaP;
 
     let manifest = manifestSnap.exists && Array.isArray(manifestSnap.data().words)
       ? manifestSnap.data().words
