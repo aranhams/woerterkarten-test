@@ -6,6 +6,7 @@ dist/
 # Environment / secrets — never commit (set these in the Vercel dashboard)
 .env
 .env.*
+*.sh
 # keep only the placeholder template, as documentation of required vars
 !.env.example
 serviceAccount*.json

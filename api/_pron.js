@@ -15,7 +15,7 @@ const MAX_HYPH_LEN = 120;
 
 const LOOKUPABLE = /^[A-Za-zÄÖÜäöüßÉéÈèÊêÍíÓóÚúÑñÇç' .-]{1,60}$/;
 const IPA_ALLOWED = /^[\p{L}\p{M}\s.‿]+$/u;
-const VOICE_OK = /^[A-Za-z-]{1,64}$/;
+const VOICE_OK = /^[A-Za-z0-9:-]{1,64}$/;
 const REGION_OK = /^[a-z0-9-]{1,32}$/;
 
 const nfc = (s) => String(s ?? "").normalize("NFC").trim();
@@ -33,9 +33,12 @@ export function xmlEscape(s) {
     .replace(/'/g, "&apos;");
 }
 
-function voiceName() {
+function voiceName(L) {
   const v = String(process.env.AZURE_SPEECH_VOICE || "").trim();
-  return VOICE_OK.test(v) ? v : DEFAULT_VOICE;
+  if (!v) return DEFAULT_VOICE;
+  if (VOICE_OK.test(v)) return v;
+  L?.log("alert", "pron.voice_rejected", { configured: v.slice(0, 80), using: DEFAULT_VOICE });
+  return DEFAULT_VOICE;
 }
 
 export function germanSection(wikitext) {
@@ -272,7 +275,7 @@ export async function ensurePron(db, de, L) {
     return { pron: toPronMap({ ...cached, de: word }), external: false };
   }
 
-  const voice = voiceName();
+  const voice = voiceName(L);
   const audioKey = audioKeyFor(word, voice);
   const skipWiki = !!(cached && cached.v === PRON_V && cached.src);
   const reusesAudio = !!(cached && cached.audioKey === audioKey && cached.url);
