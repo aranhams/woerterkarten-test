@@ -14,6 +14,7 @@ export const LANGS = [
   { code: "IT", label: "Italiano 🇮🇹",    name: "Italienisch" },
   { code: "PT", label: "Português 🇧🇷",   name: "Portugiesisch" },
   { code: "JA", label: "日本語 🇯🇵",       name: "Japanisch" },
+  { code: "MK", label: "Македонски 🇲🇰",   name: "Mazedonisch" },
 ];
 
 export const LANGUAGES = LANGS.map(({ code, label }) => ({ code, label }));
