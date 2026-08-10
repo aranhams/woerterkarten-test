@@ -163,7 +163,7 @@ export function buildSsml(de, voice) {
   const locale = parts.length >= 3 ? `${parts[0]}-${parts[1]}` : "de-DE";
   return (
     `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${locale}">` +
-    `<voice name="${xmlEscape(name)}">${xmlEscape(nfc(de))}</voice></speak>`
+    `<voice name="${xmlEscape(name)}"><lang xml:lang="${locale}">${xmlEscape(nfc(de))}</lang></voice></speak>`
   );
 }
 

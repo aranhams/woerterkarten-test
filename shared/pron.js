@@ -1,4 +1,4 @@
-export const PRON_V = 3;
+export const PRON_V = 4;
 
 const norm = (s) => String(s ?? "").normalize("NFC").trim();
 
