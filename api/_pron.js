@@ -4,7 +4,7 @@ import { PRON_V } from "../shared/pron.js";
 
 export { PRON_V };
 
-const DEFAULT_VOICE = "de-DE-SeraphinaMultilingualNeural";
+const DEFAULT_VOICE = "de-DE-Seraphina:DragonHDLatestNeural";
 const WIKTIONARY_TIMEOUT_MS = 6000;
 const AZURE_TIMEOUT_MS = 10000;
 const CLOUDINARY_TIMEOUT_MS = 15000;
