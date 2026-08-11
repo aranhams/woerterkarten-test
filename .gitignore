@@ -47,6 +47,7 @@ npm-debug.log*
 docs/
 
 # Tests & one-off debug scripts (run locally, never routed or deployed)
+tests/
 *.test.js
 *.test.mjs
 *.test.jsx

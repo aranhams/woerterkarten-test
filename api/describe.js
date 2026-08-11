@@ -2,7 +2,7 @@ import { verifyBearer, applyCors, getDb } from "./_firebase.js";
 import { rateLimit, clientIp } from "./_ratelimit.js";
 import { requestLogger } from "./_log.js";
 import {
-  DESC_V, descFresh, mentionsHeadword, buildDescribeRequest, clipDesc, descNfc, descNorm,
+  DESC_V, descFresh, mentionsHeadword, buildDescribeRequest, clipDesc, descNfc,
 } from "./_describe.js";
 
 const WORD_ID = /^[A-Za-z0-9_-]{1,128}$/;
