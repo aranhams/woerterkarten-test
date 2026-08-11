@@ -14,12 +14,13 @@ import { KurseTab } from "./components/tabs/KurseTab";
 import { ProgressTab } from "./components/tabs/ProgressTab";
 import { StudentsTab } from "./components/tabs/StudentsTab";
 import { AdminTab } from "./components/tabs/AdminTab";
+import { DescribeTab } from "./components/tabs/DescribeTab";
 
 const TAB_KEY = "dw_tab";
 function tabAllowed(t, { isTeacher, isAdmin, studentView }) {
   const learner = !isTeacher || studentView;
   if (t === "learn" || t === "words" || t === "folders") return learner;
-  if (t === "manage" || t === "kurse" || t === "progress") return isTeacher;
+  if (t === "manage" || t === "kurse" || t === "progress" || t === "describe") return isTeacher;
   if (t === "admin") return isAdmin;
   return false;
 }
@@ -78,24 +79,43 @@ export default function App() {
 
   const learnerTabs = !session.isTeacher || studentView;
 
+  const navGroups = [
+    learnerTabs && { cap: "Lernen", tabs: [
+      { id: "learn", label: "🃏 Lernen" },
+      { id: "words", label: "📋 Wörter" },
+      { id: "folders", label: "📁 Ordner" },
+    ] },
+    session.isTeacher && { cap: "Unterrichten", tabs: [
+      { id: "describe", label: "📖 Beschreiben" },
+      { id: "manage", label: "✏️ Verwalten" },
+      { id: "kurse", label: "👥 Kurse" },
+      { id: "progress", label: "📊 Fortschritt" },
+    ] },
+  ].filter(Boolean);
+  const showCaps = navGroups.length > 1;
+
   return (<div className="app">
     <header className="header">
       <div className="brand"><h1>Wörterkarten</h1><span>Deutsch lernen</span></div>
-      <UserMenu session={session} onLogout={logout} studentView={studentView} onToggleStudentView={toggleStudentView} />
+      <UserMenu session={session} onLogout={logout} studentView={studentView} onToggleStudentView={toggleStudentView} onOpenAdmin={() => setTab("admin")} />
     </header>
-    <nav className="nav" ref={navRef}>
-      {learnerTabs && <button className={`nav-tab${tab === "learn" ? " active" : ""}`} onClick={() => setTab("learn")}>🃏 Lernen</button>}
-      {learnerTabs && <button className={`nav-tab${tab === "words" ? " active" : ""}`} onClick={() => setTab("words")}>📋 Wörter</button>}
-      {learnerTabs && <button className={`nav-tab${tab === "folders" ? " active" : ""}`} onClick={() => setTab("folders")}>📁 Ordner</button>}
-      {session.isTeacher && <button className={`nav-tab${tab === "manage" ? " active" : ""}`} onClick={() => setTab("manage")}>✏️ Verwalten</button>}
-      {session.isTeacher && <button className={`nav-tab${tab === "kurse" ? " active" : ""}`} onClick={() => setTab("kurse")}>👥 Kurse</button>}
-      {session.isTeacher && <button className={`nav-tab${tab === "progress" ? " active" : ""}`} onClick={() => setTab("progress")}>📊 Fortschritt</button>}
-      {session.isAdmin && <button className={`nav-tab${tab === "admin" ? " active" : ""}`} onClick={() => setTab("admin")}>🔐 Administration</button>}
+    <nav className="nav-groups" ref={navRef}>
+      {navGroups.map((g) => (
+        <div className="nav-group" key={g.cap}>
+          {showCaps && <span className="nav-group-cap">{g.cap}</span>}
+          <div className="nav-group-tabs">
+            {g.tabs.map((t) => (
+              <button key={t.id} className={`nav-tab${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>{t.label}</button>
+            ))}
+          </div>
+        </div>
+      ))}
     </nav>
     {tab === "learn" && learnerTabs && <LearnTab session={session} />}
     {tab === "words" && learnerTabs && <WordsTab session={session} />}
     {tab === "folders" && learnerTabs && <FoldersTab session={session} />}
     {tab === "manage" && session.isTeacher && <ManageTab session={session} />}
+    {tab === "describe" && session.isTeacher && <DescribeTab session={session} />}
     {tab === "kurse" && session.isTeacher && <KurseTab session={session} />}
     {tab === "progress" && session.isTeacher && <ProgressTab session={session} />}
     {tab === "admin" && session.isAdmin && <><AdminTab /><StudentsTab session={session} /></>}

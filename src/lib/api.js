@@ -69,6 +69,18 @@ export async function translateWord(payload) {
   return res.json();
 }
 
+export async function describeWord({ wordId, word, article, force = false }) {
+  const token = await idToken();
+  const res = await fetch("/api/describe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ wordId, word, article, force }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Beschreibung fehlgeschlagen");
+  return data;
+}
+
 async function pronounce(payload) {
   const token = await idToken();
   const res = await fetch("/api/pronounce", {

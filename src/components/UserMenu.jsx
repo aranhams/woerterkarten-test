@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { JoinClass } from "./JoinClass";
 import { ChangePassword } from "./ChangePassword";
 
-export function UserMenu({ session, onLogout, studentView, onToggleStudentView }) {
+export function UserMenu({ session, onLogout, studentView, onToggleStudentView, onOpenAdmin }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -37,6 +37,11 @@ export function UserMenu({ session, onLogout, studentView, onToggleStudentView }
             </div>
           )}
           <ChangePassword session={session} />
+          {session.isAdmin && (
+            <button className="user-menu-item neutral" role="menuitem" onClick={() => { setOpen(false); onOpenAdmin?.(); }}>
+              Administration
+            </button>
+          )}
           <button className="user-menu-item" role="menuitem" onClick={() => { setOpen(false); onLogout(); }}>
             ↪ Abmelden
           </button>

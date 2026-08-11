@@ -4,7 +4,7 @@ import { pronState } from "../lib/pron";
 
 let currentAudio = null;
 
-export function SpokenWord({ word, style }) {
+export function SpokenButton({ word }) {
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef(null);
 
@@ -38,6 +38,21 @@ export function SpokenWord({ word, style }) {
     audio.play().catch(() => setPlaying(false));
   }
 
+  return (
+    <button type="button" className={`pron-play${playing ? " playing" : ""}`} onClick={play}
+      disabled={!url} aria-label={url ? `${word.de} anhören` : "Aussprache nicht verfügbar"}>
+      <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false">
+        <path d="M8 5.5v13l11-6.5z" fill="currentColor" />
+      </svg>
+    </button>
+  );
+}
+
+export function SpokenWord({ word, style }) {
+  const state = pronState(word);
+  const p = word.pron || {};
+  const url = state === "ready" && validAudioUrl(p.url) ? p.url : null;
+
   const hint =
     state === "pending" ? "⏳ Aussprache wird vorbereitet …"
     : !url ? "Keine Aussprachedaten"
@@ -45,12 +60,7 @@ export function SpokenWord({ word, style }) {
 
   return (<>
     <div className="fc-word-row">
-      <button type="button" className={`pron-play${playing ? " playing" : ""}`} onClick={play}
-        disabled={!url} aria-label={url ? `${word.de} anhören` : "Aussprache nicht verfügbar"}>
-        <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false">
-          <path d="M8 5.5v13l11-6.5z" fill="currentColor" />
-        </svg>
-      </button>
+      <SpokenButton word={word} />
       <span className="fc-word" style={style}>{word.de}</span>
       <span className="pron-spacer" aria-hidden="true" />
     </div>

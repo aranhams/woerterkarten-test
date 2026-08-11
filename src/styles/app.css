@@ -28,8 +28,14 @@ h1,h2,h3{font-family:'Lora',Georgia,serif;}
 .btn-main:hover{background:var(--ink-soft);} .btn-main:disabled{opacity:.4;cursor:not-allowed;}
 .auth-switch{margin-top:16px;font-size:13px;color:var(--sage);cursor:pointer;background:none;border:none;text-decoration:underline;font-family:inherit;display:block;width:100%;text-align:center;}
 .err{color:var(--red-soft);font-size:13px;margin-top:4px;} .ok{color:var(--sage);font-size:13px;margin-top:4px;}
-.nav{display:flex;gap:4px;background:var(--ivory-dark);border-radius:10px;padding:4px;margin-bottom:22px;}
-.nav-tab{flex:1;white-space:nowrap;padding:8px 6px;border:none;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;background:transparent;color:var(--ink-soft);font-family:inherit;transition:all .15s;}
+/* Grouped nav: each area is a full-width pill-bar with a caption; tabs flex to fill it,
+   so their width scales with how many the group has. */
+.nav-groups{display:flex;flex-direction:column;align-items:stretch;gap:12px;margin-bottom:22px;}
+.nav-group{display:flex;flex-direction:column;gap:6px;width:100%;}
+.nav-group-cap{font-size:9.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--sage-light);padding-left:6px;}
+.nav-group-tabs{display:flex;gap:3px;background:var(--ivory-dark);border-radius:10px;padding:4px;}
+.nav-tab{flex:1;min-width:0;white-space:nowrap;padding:8px 10px;border:none;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;background:transparent;color:var(--ink-soft);font-family:inherit;transition:all .15s;}
+.nav-tab:hover{color:var(--ink);}
 .nav-tab.active{background:white;color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.10);}
 .stats-bar{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;}
 .stat{background:white;border-radius:10px;padding:13px 10px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.06);}
@@ -67,6 +73,17 @@ h1,h2,h3{font-family:'Lora',Georgia,serif;}
 .wi-text{flex:1;min-width:0;} .wi-de{font-weight:600;font-size:15px;overflow-wrap:anywhere;} .wi-article{color:var(--accent);font-style:italic;font-size:13px;margin-right:3px;}
 .wi-ru{font-size:13px;color:var(--ink-soft);margin-top:2px;overflow-wrap:anywhere;}
 .wi-folder{font-size:10px;background:var(--accent-pale);color:var(--accent);padding:2px 7px;border-radius:99px;font-weight:600;white-space:nowrap;}
+/* Beschreiben tab: the riddle is the row's content; clamp to two lines so the list stays scannable. */
+.dsc-riddle{font-size:14px;line-height:1.5;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.dsc-meta{display:flex;align-items:center;gap:8px;margin-top:8px;}
+.dsc-word-btn{font-family:inherit;font-weight:600;font-size:14px;color:var(--ink);background:none;border:none;padding:2px 4px;margin-left:-4px;border-radius:6px;cursor:pointer;transition:background .15s;}
+.dsc-word-btn:hover{background:var(--ivory-dark);}
+.dsc-word-btn .wi-article{font-weight:400;}
+.dsc-hidden-btn{font-family:inherit;font-size:13px;color:var(--sage-light);letter-spacing:3px;background:none;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;transition:color .15s,background .15s;}
+.dsc-hidden-btn:hover{color:var(--sage);background:var(--sage-pale);}
+.dsc-icon-btn{background:none;border:none;cursor:pointer;color:var(--sage-light);font-size:14px;padding:4px 6px;border-radius:6px;transition:color .15s,background .15s;}
+.dsc-icon-btn:hover{color:var(--sage);background:var(--sage-pale);}
+.dsc-icon-btn:disabled{opacity:.5;cursor:default;}
 .wi-badge{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:600;text-transform:uppercase;}
 .badge-g{background:var(--sage-pale);color:var(--sage);} .badge-p{background:var(--accent-pale);color:var(--accent);}
 .btn-del{background:none;border:none;cursor:pointer;color:#ccc;font-size:15px;padding:3px 5px;border-radius:6px;transition:color .15s,background .15s;}
@@ -119,9 +136,12 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 @media (max-width:640px){
   .auth-box input,.auth-box select,.form-row input,.add-form input,.add-form select,.add-form textarea,.filter-bar input,.filter-bar select{font-size:16px;}
   .btn-del{font-size:18px;padding:8px 11px;}
-  .nav{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
-  .nav::-webkit-scrollbar{display:none;}
-  .nav-tab{flex:0 0 auto;white-space:nowrap;padding:8px 12px;}
+  /* On phones each bar stays full width. Tabs grow to fill it (so Lernen's 3 tabs span
+     the whole bar) but never shrink below their label — a bar that can't fit (Unterrichten's
+     4) scrolls horizontally instead of colliding. */
+  .nav-group-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+  .nav-group-tabs::-webkit-scrollbar{display:none;}
+  .nav-tab{flex:1 0 auto;padding:8px 12px;}
 }
 .fc-word-row{display:flex;align-items:center;justify-content:center;gap:20px;max-width:100%;}
 .fc-word-row .fc-word{min-width:0;}

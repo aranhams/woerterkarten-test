@@ -1,4 +1,6 @@
-export const LIMIT = { username: 32, password: 8, de: 100, ru: 200, example: 300, folder: 60 };
+export const LIMIT = { username: 32, password: 8, de: 100, ru: 200, example: 300, folder: 60, desc: 300 };
+
+export const DESC_V = 1;
 export const ARTICLES = ["", "der", "die", "das", "ein", "eine"];
 
 export const FOLDER_PAGE = 10;

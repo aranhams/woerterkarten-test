@@ -1,4 +1,4 @@
-import { LIMIT } from "./constants";
+import { LIMIT, DESC_V } from "./constants";
 import { clip, cleanArticle, validImageUrl } from "./format";
 
 export function validateWordInput({ de, article, ru, example, imageUrl }, { requireRu = false } = {}) {
@@ -48,4 +48,12 @@ export function embeddedTrans(word, lang) {
 export function withTrans(word, lang) {
   const t = embeddedTrans(word, lang);
   return t ? { ...word, ru: t.ru, example: t.example || word.example } : word;
+}
+
+// Client mirror of api/_describe.js descFresh(): a stored German description is usable
+// when it matches the current word and schema version and was generated successfully.
+export function descFresh(word) {
+  const d = word && word.desc;
+  if (!d || d.v !== DESC_V || d.st !== "ready" || !d.text) return false;
+  return lowerKey(d.de) === lowerKey(word.de);
 }

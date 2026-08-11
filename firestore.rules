@@ -39,23 +39,25 @@ service cloud.firestore {
     function wordKeysOk(source) {
       let d = request.resource.data;
       return source == 'global'
-        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron', 't'])
+        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron', 't', 'desc'])
         : d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron']);
     }
 
-    // Pronunciation data (Worttrennung, IPA, Betonung, Cloudinary audio URL) and the
-    // embedded translation map `t` are written exclusively by the Admin SDK
-    // (/api/pronounce, /api/translate), which bypasses these rules. No client may
-    // introduce or alter them — otherwise a student could point a card at an arbitrary
-    // audio URL or forge a translation for the whole class.
+    // Pronunciation data (Worttrennung, IPA, Betonung, Cloudinary audio URL), the
+    // embedded translation map `t` and the German description `desc` are written
+    // exclusively by the Admin SDK (/api/pronounce, /api/translate, /api/describe),
+    // which bypasses these rules. No client may introduce or alter them — otherwise a
+    // student could point a card at an arbitrary audio URL, forge a translation, or
+    // forge a description for the whole class.
     function serverFieldsUntouched() {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pron', 't']);
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pron', 't', 'desc']);
     }
 
     function validWordCreate(source) {
       return wordFieldsOk(source) && wordKeysOk(source)
           && !('pron' in request.resource.data)
-          && !('t' in request.resource.data);
+          && !('t' in request.resource.data)
+          && !('desc' in request.resource.data);
     }
 
     function validWordUpdate(source) {

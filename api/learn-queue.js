@@ -95,7 +95,9 @@ export default async function handler(req, res) {
       const snaps = await db.getAll(...slice.map((id) => db.doc(`global_words/${id}`)));
       for (const s of snaps) {
         if (!s.exists) { dropped++; continue; }
-        const { memberUids, deL, ruL, ...w } = s.data();
+        // `desc` is the teacher-only German riddle; strip it so it never rides along in
+        // the student learn-queue payload (UI-level hiding, see BESCHREIBUNGEN_PLAN §3.1).
+        const { memberUids, deL, ruL, desc, ...w } = s.data();
         if (!Array.isArray(memberUids) || !memberUids.includes(user.uid)) { dropped++; continue; }
         dueWords.push({ ...w, id: s.id, source: "global" });
       }
