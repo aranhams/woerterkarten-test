@@ -51,7 +51,7 @@ export default function App() {
       });
       const saved = localStorage.getItem(TAB_KEY);
       const sv = localStorage.getItem("dw_studentview") === "1";
-      const fallback = isTeacher ? "manage" : "learn";
+      const fallback = isTeacher ? "describe" : "learn";
       setTab(saved && tabAllowed(saved, { isTeacher, isAdmin, studentView: sv }) ? saved : fallback);
       setLoading(false);
     });
@@ -71,7 +71,7 @@ export default function App() {
     const nv = !studentView;
     localStorage.setItem("dw_studentview", nv ? "1" : "0");
     setStudentView(nv);
-    if (!nv && (tab === "learn" || tab === "words" || tab === "folders")) setTab("manage");
+    if (!nv && (tab === "learn" || tab === "words" || tab === "folders")) setTab("describe");
   }
 
   if (loading) return <div className="app"><div className="loading"><div className="spinner" /><br />Lädt…</div></div>;
