@@ -198,6 +198,11 @@ export function LearnTab({ session }) {
     const val = { ...nx, rev: card.deRev || 0, nm, lp, lt };
     const staysDue = isDue(val);
     const newProgress = { ...progress, [card.id]: val };
+    // Hide the answer in the SAME commit as the progress change. Updating progress can
+    // drop the answered card from dueCards and slide the next card into view; if revealed
+    // were still true then, that next card would flash its translation during the async
+    // saveOneProgress write below. Resetting it here keeps the incoming card face-down.
+    setRevealed(false);
     setProgress(newProgress);
 
     const wasLearned = (p.level || 0) >= MASTERY_LEVEL;
@@ -211,7 +216,6 @@ export function LearnTab({ session }) {
     const nextLearned = learned + learnedStep;
     queueActivity(session.uid, knew, total ? Math.round((nextLearned / total) * 100) : undefined);
 
-    setRevealed(false);
     setIdx((i) => {
       if (staysDue) return i >= dueCards.length - 1 ? 0 : i + 1;
       const remaining = dueCards.length - 1;
