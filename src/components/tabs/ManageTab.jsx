@@ -3,7 +3,7 @@ import { serverTimestamp, writeBatch, doc } from "firebase/firestore";
 import { db } from "../../lib/firebase";
 import { LIMIT, FOLDER_PAGE, FOLDER_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
-import { validateWordInput, germanChanged, nextDeRev, searchFields } from "../../lib/word";
+import { validateWordInput, germanChanged, nextDeRev, searchFields, buildDesc, descFresh } from "../../lib/word";
 import { classSync, requestPronunciation, resyncPronunciation } from "../../lib/api";
 import { pronState } from "../../lib/pron";
 import { loadGlobalFolders } from "../../data/loaders";
@@ -20,6 +20,7 @@ const MIN_QUERY = 2;
 export function ManageTab({ session }) {
   const [de, setDe] = useState(""); const [article, setArticle] = useState("");
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
+  const [desc, setDesc] = useState("");
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
   const [bulk, setBulk] = useState(""); const [msg, setMsg] = useState("");
   const [folderName, setFolderName] = useState(""); const [folderIcon, setFolderIcon] = useState("📁");
@@ -35,6 +36,7 @@ export function ManageTab({ session }) {
   const cancelSync = useRef(false);
   const searchTimer = useRef(null);
   const searchSeq = useRef(0);
+  const deInputRef = useRef(null);
   const [pageIdx, setPageIdx] = useState(0);
   const [total, setTotal] = useState(null);
 
@@ -112,7 +114,7 @@ export function ManageTab({ session }) {
   }
 
   function startWordEdit(w) {
-    setWEdit({ id: w.id, de: w.de || "", article: w.article || "", ru: w.ru || "", example: w.example || "", folderId: w.folderId || "", imageUrl: w.imageUrl || "" });
+    setWEdit({ id: w.id, de: w.de || "", article: w.article || "", ru: w.ru || "", example: w.example || "", folderId: w.folderId || "", imageUrl: w.imageUrl || "", desc: descFresh(w) ? w.desc.text : "" });
   }
 
   async function saveWordEdit() {
@@ -127,6 +129,7 @@ export function ManageTab({ session }) {
     const patch = {
       ...res.clean, folderId: fid, memberUids, deRev: nextDeRev(word, res.clean),
       ...searchFields(res.clean),
+      desc: buildDesc(wEdit.desc, res.clean.de),
       updatedAt: serverTimestamp(), updatedBy: session.uid,
     };
     try {
@@ -145,14 +148,25 @@ export function ManageTab({ session }) {
     } catch { flashRow(id, "⚠ Keine Berechtigung."); }
   }
 
+  function onArticleChange(v) {
+    const t = v.trim().toLowerCase();
+    if (["der", "die", "das", "eine"].includes(t) || (t === "ein" && /\s$/.test(v))) {
+      setArticle(t);
+      deInputRef.current?.focus();
+    } else {
+      setArticle(v);
+    }
+  }
+
   async function addWord() {
     if (!de.trim()) return;
     if (imageUrl && !validImageUrl(imageUrl)) { flash("⚠ Ungültige Bild-URL."); return; }
     const id = `g_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const w = { de: clip(de.trim(), LIMIT.de), article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), ...searchFields({ de, ru }) };
+    const cleanDe = clip(de.trim(), LIMIT.de);
+    const w = { de: cleanDe, article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), desc: buildDesc(desc, cleanDe), ...searchFields({ de, ru }) };
     try {
       await dbSet(`global_words/${id}`, w); setWords((prev) => [...prev, { ...w, id }]);
-      setDe(""); setArticle(""); setRu(""); setExample(""); setImageUrl(""); flash("✓ Wort hinzugefügt");
+      setDe(""); setArticle(""); setRu(""); setExample(""); setDesc(""); setImageUrl(""); flash("✓ Wort hinzugefügt");
       classSync("word-assigned", { wordIds: [id] }).catch(() => {});
       requestPronunciation(id, "global").catch(() => {});
     }
@@ -300,16 +314,23 @@ export function ManageTab({ session }) {
     <div className="add-form">
       <h3>Einzelnes Wort hinzufügen</h3>
       <div className="form-row">
-        <input className="in-sm" placeholder="der/die/das" value={article} onChange={(e) => setArticle(e.target.value)} />
-        <input placeholder="Deutsches Wort" value={de} maxLength={LIMIT.de} onChange={(e) => setDe(e.target.value)} />
-        <input placeholder="Übersetzung (optional — Schüler übersetzen selbst)" value={ru} maxLength={LIMIT.ru} onChange={(e) => setRu(e.target.value)} />
-      </div>
-      <div className="form-row">
-        <input placeholder="Beispielsatz (optional)" value={example} maxLength={LIMIT.example} onChange={(e) => setExample(e.target.value)} />
+        <input className="in-sm" placeholder="der/die/das" value={article} onChange={(e) => onArticleChange(e.target.value)} />
+        <input ref={deInputRef} placeholder="Deutsches Wort" value={de} maxLength={LIMIT.de} onChange={(e) => setDe(e.target.value)} />
         <select value={folderId} onChange={(e) => setFolderId(e.target.value)} style={{ flex: "none", width: 160 }}>
           <option value="">📂 Kein Ordner</option>
           {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
         </select>
+      </div>
+      <div className="form-row">
+        <input placeholder="Beispielsatz (optional)" value={example} maxLength={LIMIT.example} onChange={(e) => setExample(e.target.value)} />
+      </div>
+      <div className="form-row">
+        <textarea placeholder="Beschreibung / Rätsel für die Klasse (optional)" value={desc} maxLength={LIMIT.desc}
+          rows={2} onChange={(e) => setDesc(e.target.value)}
+          style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", resize: "vertical", background: "var(--ivory)", outline: "none" }} />
+      </div>
+      <div className="form-row">
+        <input placeholder="Übersetzung (optional — Schüler übersetzen selbst)" value={ru} maxLength={LIMIT.ru} onChange={(e) => setRu(e.target.value)} />
       </div>
       <div className="form-row" style={{ alignItems: "flex-end" }}>
         <ImageUpload value={imageUrl} onChange={setImageUrl} small />
@@ -363,6 +384,11 @@ export function ManageTab({ session }) {
                   <option value="">📂 Kein Ordner</option>
                   {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
                 </select>
+              </div>
+              <div className="form-row">
+                <textarea placeholder="Beschreibung / Rätsel für die Klasse (optional)" value={wEdit.desc} maxLength={LIMIT.desc}
+                  rows={2} onChange={(e) => setWEdit({ ...wEdit, desc: e.target.value })}
+                  style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", resize: "vertical", background: "var(--ivory)", outline: "none" }} />
               </div>
               <div className="form-row" style={{ alignItems: "flex-end" }}>
                 <ImageUpload value={wEdit.imageUrl} onChange={(url) => setWEdit({ ...wEdit, imageUrl: url })} small />

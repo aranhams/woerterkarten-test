@@ -43,26 +43,40 @@ service cloud.firestore {
         : d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron']);
     }
 
-    // Pronunciation data (Worttrennung, IPA, Betonung, Cloudinary audio URL), the
-    // embedded translation map `t` and the German description `desc` are written
-    // exclusively by the Admin SDK (/api/pronounce, /api/translate, /api/describe),
-    // which bypasses these rules. No client may introduce or alter them — otherwise a
-    // student could point a card at an arbitrary audio URL, forge a translation, or
-    // forge a description for the whole class.
+    // Pronunciation data (Worttrennung, IPA, Betonung, Cloudinary audio URL) and the
+    // embedded translation map `t` are written exclusively by the Admin SDK
+    // (/api/pronounce, /api/translate), which bypasses these rules. No client may
+    // introduce or alter them — otherwise a student could point a card at an arbitrary
+    // audio URL or forge a translation for the whole class.
     function serverFieldsUntouched() {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pron', 't', 'desc']);
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pron', 't']);
+    }
+
+    // The German riddle `desc` is authored by teachers (only teachers can write
+    // global_words at all — see the match block). Validate its shape when present;
+    // null clears it. Students never reach this because they cannot write global_words.
+    function descOk() {
+      let d = request.resource.data;
+      return !('desc' in d) || d.desc == null || (
+           d.desc.keys().hasOnly(['text', 'de', 'v', 'st'])
+        && isStr(d.desc.text, 300) && d.desc.text.size() > 0
+        && isStr(d.desc.de, 100)
+        && d.desc.v is int
+        && d.desc.st == 'ready'
+      );
     }
 
     function validWordCreate(source) {
       return wordFieldsOk(source) && wordKeysOk(source)
           && !('pron' in request.resource.data)
           && !('t' in request.resource.data)
-          && !('desc' in request.resource.data);
+          && descOk();
     }
 
     function validWordUpdate(source) {
       return wordFieldsOk(source) && wordKeysOk(source)
           && serverFieldsUntouched()
+          && descOk()
           && request.resource.data.source  == resource.data.source     // immutable
           && request.resource.data.addedBy == resource.data.addedBy;    // immutable
     }

@@ -50,10 +50,14 @@ export function withTrans(word, lang) {
   return t ? { ...word, ru: t.ru, example: t.example || word.example } : word;
 }
 
-// Client mirror of api/_describe.js descFresh(): a stored German description is usable
-// when it matches the current word and schema version and was generated successfully.
 export function descFresh(word) {
   const d = word && word.desc;
   if (!d || d.v !== DESC_V || d.st !== "ready" || !d.text) return false;
   return lowerKey(d.de) === lowerKey(word.de);
+}
+
+export function buildDesc(text, de) {
+  const t = clip(String(text ?? "").trim(), LIMIT.desc);
+  if (!t) return null;
+  return { text: t, de: String(de ?? "").trim(), v: DESC_V, st: "ready" };
 }
