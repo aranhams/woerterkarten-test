@@ -1,29 +1,29 @@
 import { useState, useEffect, useRef } from "react";
-import { WORD_PAGE_SERVER, DESC_V } from "../../lib/constants";
+import { DESC_V } from "../../lib/constants";
 import { validImageUrl, cldImg } from "../../lib/format";
 import { descFresh } from "../../lib/word";
 import { describeWord } from "../../lib/api";
 import { loadGlobalFolders } from "../../data/loaders";
-import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
-import { DescribeCardModal } from "../DescribeCardModal";
-import { SpokenButton } from "../Pronunciation";
+import { newPageState, loadNextPage, countWords } from "../../data/pagination";
+import { usePronunciation } from "../../data/usePron";
+import { SpokenWord } from "../Pronunciation";
+import { openChannel, cardPayload, PRESENT_PARAM } from "../../lib/present";
 
 const SEARCH_DEBOUNCE = 350;
 const MIN_QUERY = 2;
 const GEN_THROTTLE_MS = 300;
+const PREFETCH = 3;
 
 export function DescribeTab({ session }) {
   const [page, setPage] = useState(null);
   const [folders, setFolders] = useState([]);
   const [filterFolder, setFilterFolder] = useState("all");
   const [total, setTotal] = useState(null);
-  const [pageIdx, setPageIdx] = useState(0);
+  const [cardIdx, setCardIdx] = useState(0);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [showWords, setShowWords] = useState(false);
-  const [revealedRows, setRevealedRows] = useState(() => new Set());
-  const [preview, setPreview] = useState(null);
+  const [revealed, setRevealed] = useState(false);
   const [rowMsg, setRowMsg] = useState(null);
   const [regen, setRegen] = useState(() => new Set());
   const [genActive, setGenActive] = useState(() => new Set());
@@ -51,26 +51,26 @@ export function DescribeTab({ session }) {
     })();
   }, []);
 
-  async function goto(i) {
-    if (!page || busy || i < 0) return;
-    setBusy(true);
-    const next = await ensureWindow(page, i, WORD_PAGE_SERVER);
+  const rows = page ? page.rows : [];
+  const searching = !!search.trim();
+  const current = rows[cardIdx] || null;
+
+  async function resetTo(next, n) {
     setPage(next);
-    if (i === 0 || next.rows.length > i * WORD_PAGE_SERVER) setPageIdx(i);
-    setBusy(false);
+    setCardIdx(0);
+    setRevealed(false);
+    if (n !== undefined) setTotal(n);
   }
 
   async function onFolderChange(v) {
     setFilterFolder(v);
     setBusy(true);
-    setPageIdx(0);
     const q = search.trim();
     const [next, n] = await Promise.all([
       loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId: folderScope(v), q })),
-      q ? Promise.resolve(null) : countWords({ source: "global", uid: session.uid, teacher: true, folderId: folderScope(v) }),
+      q ? Promise.resolve(undefined) : countWords({ source: "global", uid: session.uid, teacher: true, folderId: folderScope(v) }),
     ]);
-    setPage(next);
-    if (!q) setTotal(n);
+    await resetTo(next, q ? undefined : n);
     setBusy(false);
   }
 
@@ -83,7 +83,7 @@ export function DescribeTab({ session }) {
       if (q.length > 0 && q.length < MIN_QUERY) return;
       setBusy(true);
       const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId: folderScope(filterFolder), q }));
-      if (seq === searchSeq.current) { setPage(next); setPageIdx(0); }
+      if (seq === searchSeq.current) await resetTo(next);
       setBusy(false);
     }, SEARCH_DEBOUNCE);
   }
@@ -101,18 +101,31 @@ export function DescribeTab({ session }) {
     setTimeout(() => setRowMsg((r) => (r && r.id === id && r.text === text ? null : r)), 2500);
   }
 
-  const searching = !!search.trim();
-  const visible = windowRows(page, pageIdx, WORD_PAGE_SERVER);
+  async function go(delta) {
+    const target = cardIdx + delta;
+    if (target < 0 || busy) return;
+    if (target >= rows.length) {
+      if (!page || page.exhausted) return;
+      setBusy(true);
+      const next = await loadNextPage(page);
+      setPage(next);
+      setBusy(false);
+      if (target >= next.rows.length) return;
+    }
+    setRevealed(false);
+    setCardIdx(target);
+  }
 
-  // Auto-generate on load: for the visible page only, request a description for each
-  // word that lacks a fresh one. In-flight dedupe via generating.current; sequential
-  // with a small delay so the per-minute rate limit is not tripped. Re-runs when the
-  // visible set or any freshness changes (a saved desc removes that word from the todo).
-  const visibleSig = visible.map((w) => `${w.id}:${descFresh(w) ? 1 : 0}`).join(",");
+  // Auto-generate for the current card and a small look-ahead window so flipping forward
+  // rarely lands on an empty card. In-flight dedupe via generating.current; sequential with
+  // a small delay to respect the per-minute rate limit. Re-runs when the position or any
+  // freshness in the window changes.
+  const genWindow = rows.slice(cardIdx, cardIdx + PREFETCH);
+  const windowSig = genWindow.map((w) => `${w.id}:${descFresh(w) ? 1 : 0}`).join(",");
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      for (const w of visible) {
+      for (const w of genWindow) {
         if (cancelled) return;
         if (descFresh(w) || generating.current.has(w.id)) continue;
         markGen(w.id, true);
@@ -131,7 +144,7 @@ export function DescribeTab({ session }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [visibleSig]);
+  }, [windowSig]);
 
   async function regenerate(w) {
     if (regen.has(w.id)) return;
@@ -149,19 +162,50 @@ export function DescribeTab({ session }) {
     }
   }
 
+  usePronunciation(revealed ? current : null, session, applyPron);
 
-  function toggleRow(id) {
-    setRevealedRows((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const [presenting, setPresenting] = useState(false);
+  const presentWin = useRef(null);
+  const channel = useRef(null);
+
+  const currentFolder = current ? folders.find((f) => f.id === current.folderId) : null;
+  function broadcast() {
+    if (!channel.current) return;
+    channel.current.postMessage({ type: "state", card: cardPayload(current, currentFolder), revealed });
   }
-  function toggleAll() {
-    setShowWords((v) => !v);
-    setRevealedRows(new Set());
+  // Push state to the audience window whenever the card, reveal, or its pronunciation
+  // changes; the audience also re-requests on its own "hello" when it (re)connects.
+  useEffect(() => { if (presenting) broadcast(); }, [presenting, current?.id, revealed, current?.pron?.url]);
+
+  function stopPresenting() {
+    if (channel.current) { channel.current.postMessage({ type: "closed" }); channel.current.close(); channel.current = null; }
+    if (presentWin.current && !presentWin.current.closed) presentWin.current.close();
+    presentWin.current = null;
+    setPresenting(false);
   }
 
-  const pages = total != null && !searching ? pageCount(total, WORD_PAGE_SERVER) : null;
-  const atLastPage = pages != null ? pageIdx >= pages - 1 : !canGoNext(page, pageIdx, WORD_PAGE_SERVER);
+  function startPresenting() {
+    if (presenting) { stopPresenting(); return; }
+    const ch = openChannel();
+    if (!ch) { alert("Präsentationsmodus wird von diesem Browser nicht unterstützt."); return; }
+    ch.onmessage = (e) => { if (e.data && e.data.type === "hello") broadcast(); };
+    channel.current = ch;
+    const url = `${window.location.pathname}?${PRESENT_PARAM}=1`;
+    presentWin.current = window.open(url, "dw_present", "width=1280,height=800");
+    setPresenting(true);
+  }
+
+  useEffect(() => () => {
+    if (channel.current) { try { channel.current.postMessage({ type: "closed" }); } catch {} channel.current.close(); }
+    if (presentWin.current && !presentWin.current.closed) presentWin.current.close();
+  }, []);
 
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
+
+  const atLast = cardIdx >= rows.length - 1 && (!page || page.exhausted);
+  const posLabel = searching
+    ? `${rows.length ? cardIdx + 1 : 0} / ${rows.length}`
+    : `${rows.length ? cardIdx + 1 : 0} / ${total ?? rows.length}`;
 
   return (<>
     <div className="filter-bar">
@@ -170,75 +214,77 @@ export function DescribeTab({ session }) {
         <option value="all">Alle Ordner</option>
         {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
       </select>
-    </div>
-
-    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 9, marginTop: 2 }}>
-      <div className="sec-label" style={{ margin: 0 }}>Kurswörter ({searching ? visible.length : (total ?? visible.length)})</div>
-      <button className="btn-sm" onClick={toggleAll} disabled={!visible.length}>
-        {showWords ? "Wörter verbergen" : "Wörter zeigen"}
+      <button type="button" className={`dsc-present-btn${presenting ? " active" : ""}`} onClick={startPresenting}
+        title={presenting ? "Präsentation beenden" : "In zweitem Fenster präsentieren"}>
+        {presenting ? "⏹ Beenden" : "📺 Präsentieren"}
       </button>
     </div>
-    <div className="word-list">
-      {visible.length === 0 && <div className="empty" style={{ padding: 24 }}><p>{busy ? "Lädt…" : searching ? "Keine Treffer." : "Noch keine Kurswörter."}</p></div>}
-      {visible.map((w) => {
-        const folder = folders.find((f) => f.id === w.folderId);
-        const fresh = descFresh(w);
-        const isGenerating = genActive.has(w.id) && !fresh;
-        return (
-          <div className="word-item" key={w.id} style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>
-            <div className="dsc-riddle" onClick={() => setPreview(w.id)} style={{ cursor: "pointer" }}
-              title="Karte öffnen">
-              {fresh
-                ? w.desc.text
-                : <span style={{ color: "var(--ink-soft)", fontStyle: "italic" }}>{isGenerating ? "⏳ Beschreibung wird erstellt…" : "— noch keine Beschreibung"}</span>}
-            </div>
-
-            <div className="dsc-meta">
-              {showWords || revealedRows.has(w.id)
-                ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <SpokenButton word={w} />
-                    <button type="button" className="dsc-word-btn" onClick={(e) => { e.stopPropagation(); toggleRow(w.id); }} title="Wort verbergen">
-                      {w.article && <span className="wi-article">{w.article}</span>}{w.de}
-                    </button>
-                  </span>
-                : <button type="button" className="dsc-hidden-btn" onClick={(e) => { e.stopPropagation(); toggleRow(w.id); }} title="Wort zeigen" aria-label="Wort zeigen">••••••</button>}
-              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-                {folder && <span className="wi-folder">{folder.icon} {folder.name}</span>}
-                <button className="dsc-icon-btn" onClick={(e) => { e.stopPropagation(); regenerate(w); }} disabled={regen.has(w.id)}
-                  title="Neue Beschreibung erstellen" aria-label="Neue Beschreibung erstellen">
-                  {regen.has(w.id) ? "⏳" : "↻"}
-                </button>
-              </div>
-            </div>
-            {rowMsg && rowMsg.id === w.id && (
-              <div style={{
-                padding: "6px 10px", borderRadius: 8, fontSize: 12, fontWeight: 500, marginTop: 8,
-                background: rowMsg.text.startsWith("⚠") ? "var(--red-pale)" : "var(--sage-pale)",
-                color: rowMsg.text.startsWith("⚠") ? "var(--red-soft)" : "var(--sage)",
-              }}>{rowMsg.text}</div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-
-    {(pageIdx > 0 || !atLastPage) && (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
-        <button className="btn-sm" onClick={() => goto(pageIdx - 1)} disabled={busy || pageIdx <= 0}>‹ Zurück</button>
-        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
-          {busy ? "⏳ Lädt…" : `Seite ${pageIdx + 1}${pages != null ? ` / ${pages}` : ""}`}
-        </span>
-        <button className="btn-sm" onClick={() => goto(pageIdx + 1)} disabled={busy || atLastPage}>Weiter ›</button>
+    {presenting && (
+      <div className="dsc-present-note">
+        📺 Präsentationsfenster aktiv — auf den Beamer ziehen &amp; Vollbild (F11). Bei Bedarf auf „erweiterten" Bildschirm umstellen, nicht „duplizieren".
       </div>
     )}
 
-    {preview && (() => {
-      const pw = visible.find((w) => w.id === preview);
-      if (!pw) return null;
-      return (
-        <DescribeCardModal word={pw} folders={folders} session={session}
-          onPron={applyPron} onClose={() => setPreview(null)} />
-      );
+    {!current ? (
+      <div className="empty" style={{ padding: 40 }}>
+        <div className="emoji">🃏</div>
+        <p>{busy ? "Lädt…" : searching ? "Keine Treffer." : "Noch keine Kurswörter."}</p>
+      </div>
+    ) : (() => {
+      const w = current;
+      const folder = folders.find((f) => f.id === w.folderId);
+      const fresh = descFresh(w);
+      const isGenerating = genActive.has(w.id) && !fresh;
+      const hasImage = w.imageUrl && validImageUrl(w.imageUrl);
+      return (<>
+        <div className="dsc-nav">
+          <button className="dsc-nav-btn" onClick={() => go(-1)} disabled={busy || cardIdx <= 0} aria-label="Vorherige Karte">‹</button>
+          <span className="dsc-nav-pos">{busy ? "⏳" : posLabel}</span>
+          <button className="dsc-nav-btn" onClick={() => go(1)} disabled={busy || atLast} aria-label="Nächste Karte">›</button>
+        </div>
+
+        <div className="fc-wrap">
+          <div className="fc" translate="no" onClick={() => !revealed && setRevealed(true)} style={{ padding: 32, alignItems: "stretch", justifyContent: "flex-start", textAlign: "left" }}>
+            {folder && <div className="fc-folder">{folder.icon} {folder.name}</div>}
+
+            <div className="dsc-tag">Beschreibung</div>
+            <div style={{ fontSize: 24, lineHeight: 1.5, color: "var(--ink)", marginTop: 12, minHeight: 64 }}>
+              {fresh
+                ? `„${w.desc.text}"`
+                : <span style={{ color: "var(--ink-soft)", fontStyle: "italic", fontSize: 19 }}>{isGenerating ? "⏳ Beschreibung wird erstellt…" : "— noch keine Beschreibung"}</span>}
+            </div>
+
+            <hr style={{ border: 0, borderTop: "1px solid var(--ivory-dark)", margin: "18px 0", width: "100%" }} />
+
+            <section style={{ width: "100%", textAlign: "center" }}>
+              <div className="fc-hint">Wort</div>
+              {!revealed ? (
+                <div className="fc-tap">Tippe, um das Wort zu sehen</div>
+              ) : (<>
+                {hasImage && <img src={cldImg(w.imageUrl, 600)} className="fc-img" alt="" decoding="async" style={{ marginTop: 8, marginBottom: 12, marginLeft: "auto", marginRight: "auto", width: 180, height: 180, display: "block" }} />}
+                {w.article && <div className="fc-article" style={{ marginTop: 8, fontSize: 20 }}>{w.article}</div>}
+                <SpokenWord word={w} style={{ fontSize: 34 }} />
+                {w.ru && <div className="fc-ru" style={{ opacity: 0.7, fontSize: 18 }}>{w.ru}</div>}
+              </>)}
+            </section>
+
+            <div className="dsc-card-tools">
+              <button className="dsc-icon-btn" onClick={(e) => { e.stopPropagation(); regenerate(w); }} disabled={regen.has(w.id)}
+                title="Neue Beschreibung erstellen" aria-label="Neue Beschreibung erstellen">
+                {regen.has(w.id) ? "⏳" : "↻"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {rowMsg && rowMsg.id === w.id && (
+          <div style={{
+            padding: "6px 10px", borderRadius: 8, fontSize: 12, fontWeight: 500, marginTop: 12, textAlign: "center",
+            background: rowMsg.text.startsWith("⚠") ? "var(--red-pale)" : "var(--sage-pale)",
+            color: rowMsg.text.startsWith("⚠") ? "var(--red-soft)" : "var(--sage)",
+          }}>{rowMsg.text}</div>
+        )}
+      </>);
     })()}
   </>);
 }
