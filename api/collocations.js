@@ -85,8 +85,9 @@ async function callAnthropic({ system, user, schema, maxTokens }, { L, uid }) {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
+      model: "claude-sonnet-5",
       max_tokens: maxTokens,
+      thinking: { type: "disabled" },
       system,
       output_config: { format: { type: "json_schema", schema } },
       messages: [{ role: "user", content: user }],
@@ -99,10 +100,18 @@ async function callAnthropic({ system, user, schema, maxTokens }, { L, uid }) {
     throw new HttpError(502, "KI-Dienst nicht verfügbar");
   }
   const data = await response.json();
-  L.log("info", "colloc.upstream_ok", { uid, upstreamMs, inTokens: data?.usage?.input_tokens, outTokens: data?.usage?.output_tokens });
-  const text = data?.content?.[0]?.text?.trim() || "{}";
+  const stopReason = data?.stop_reason;
+  L.log("info", "colloc.upstream_ok", { uid, upstreamMs, stopReason, inTokens: data?.usage?.input_tokens, outTokens: data?.usage?.output_tokens });
+  const textBlock = Array.isArray(data?.content) ? data.content.find((b) => b?.type === "text") : null;
+  const text = textBlock?.text?.trim() || "";
+  if (!text) {
+    L.log("error", "colloc.no_text", { uid, stopReason, blocks: Array.isArray(data?.content) ? data.content.map((b) => b?.type) : null });
+    throw new HttpError(502, stopReason === "max_tokens"
+      ? "KI-Antwort wurde abgeschnitten (Token-Limit erreicht). Bitte erneut versuchen."
+      : "KI-Antwort ohne Textinhalt.");
+  }
   try { return JSON.parse(text); }
-  catch (e) { L.log("error", "colloc.parse_failed", { uid, err: e.message }); throw new HttpError(502, "KI-Antwort ungültig"); }
+  catch (e) { L.log("error", "colloc.parse_failed", { uid, stopReason, err: e.message }); throw new HttpError(502, "KI-Antwort ungültig"); }
 }
 
 async function spendBudget(day) {
@@ -413,7 +422,11 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const article = clip(word.article, COLLOC.articleLen);
       await spendBudget(ctx.day);
       const ai = await callAnthropic(generatePrompt(de, article, options), ctx);
-      if (!ai || typeof ai.correct !== "string" || !Array.isArray(ai.distractors) || ai.distractors.length < 3 || ai.distractors.some((d) => typeof d !== "string")) {
+      const distractorTexts = Array.isArray(ai.distractors)
+        ? ai.distractors.map((d) => (d && typeof d === "object" ? d.text : d)).filter((d) => typeof d === "string")
+        : [];
+      if (!ai || typeof ai.correct !== "string" || distractorTexts.length < 3) {
+        ctx.L.log("error", "colloc.generate.invalid_shape", { uid: user.uid, wordId, ai: JSON.stringify(ai).slice(0, 1000) });
         throw new HttpError(502, "KI-Antwort hat nicht das erwartete Format (1 richtige + mindestens 3 falsche Optionen). Bitte erneut versuchen.");
       }
       const targetWord = `${article ? article + " " : ""}${de}`.trim().toLowerCase();
@@ -423,7 +436,7 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const prevAnswers = answerNormsOf(options);
       const merged = mergeGenerated(options, {
         correct: cleanText(ai.correct, COLLOC.optionLen),
-        distractors: Array.isArray(ai.distractors) ? ai.distractors.map((d) => cleanText(d, COLLOC.optionLen)) : [],
+        distractors: distractorTexts.map((d) => cleanText(d, COLLOC.optionLen)),
       }, { uid: user.uid });
       if (merged.length === options.length) {
         throw new HttpError(502, "KI hat keine neuen Optionen geliefert. Alle Vorschläge waren bereits vorhanden. Bitte erneut versuchen oder manuell hinzufügen.");
