@@ -412,9 +412,9 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const de = clip(word.de, COLLOC.deLen);
       const article = clip(word.article, COLLOC.articleLen);
       await spendBudget(ctx.day);
-      const ai = await callAnthropic(generatePrompt(de, article), ctx);
-      if (!ai || typeof ai.correct !== "string" || !Array.isArray(ai.distractors) || ai.distractors.length !== 3 || ai.distractors.some((d) => typeof d !== "string")) {
-        throw new HttpError(502, "KI-Antwort hat nicht das erwartete Format (1 richtige + 3 falsche Optionen). Bitte erneut versuchen.");
+      const ai = await callAnthropic(generatePrompt(de, article, options), ctx);
+      if (!ai || typeof ai.correct !== "string" || !Array.isArray(ai.distractors) || ai.distractors.length < 3 || ai.distractors.some((d) => typeof d !== "string")) {
+        throw new HttpError(502, "KI-Antwort hat nicht das erwartete Format (1 richtige + mindestens 3 falsche Optionen). Bitte erneut versuchen.");
       }
       const targetWord = `${article ? article + " " : ""}${de}`.trim().toLowerCase();
       if (targetWord && ai.correct.toLowerCase().includes(targetWord)) {
@@ -425,6 +425,9 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
         correct: cleanText(ai.correct, COLLOC.optionLen),
         distractors: Array.isArray(ai.distractors) ? ai.distractors.map((d) => cleanText(d, COLLOC.optionLen)) : [],
       }, { uid: user.uid });
+      if (merged.length === options.length) {
+        throw new HttpError(502, "KI hat keine neuen Optionen geliefert. Alle Vorschläge waren bereits vorhanden. Bitte erneut versuchen oder manuell hinzufügen.");
+      }
       return persist(db, wordId, existing, {
         de, article, deRev: word.deRev || 0,
         cat: clip(ai.category, COLLOC.labelLen) || existing.cat || baseCategory(article).cat,
@@ -464,10 +467,6 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       return persist(db, wordId, existing, { options, rev: bumpRev(existing.rev, prevAnswers, options) }, stamp, user.uid);
     }
 
-    // Toggles a single option's correct flag. Multiple correct are allowed, but only above
-    // 4 options: turning one correct is refused when it would leave fewer than 3 wrong, and
-    // turning the last correct off is refused. This enforces the owner's "at 4 options only
-    // one correct" rule as a consequence of always keeping a servable 3-wrong + 1-correct.
     case "toggle-correct": {
       const wordId = reqWordId(body.wordId);
       const optId = reqOptId(body.optionId);

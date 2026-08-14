@@ -48,18 +48,12 @@ export function buildDeck(questions, progress, rng = Math.random, now = Date.now
   return shuffle(due, rng).map((q) => ({ ...q, shuffled: shuffle(q.options, rng) }));
 }
 
-// Reflexive verbs ("sich"-Verben) are stored with or without the leading pronoun. Split them
-// into the fixed pronoun and the verb so the partner (a prepositional phrase) can be slotted
-// between them: "sich" [partner] [verb], e.g. "sich" "über das Geschenk" "freuen".
 export function reflexiveParts(de) {
   const s = String(de || "").trim();
   const m = s.match(/^sich\s+(.+)$/i);
   return { pron: "sich", verb: (m ? m[1] : s).trim() };
 }
 
-// The productive detachable prefixes of German separable verbs, longest-first so "auseinander"
-// wins over "aus" and "vorbei" over "vor". Used to mark the prefix on the card so learners see
-// which part detaches in a main clause ("ruft den Arzt an").
 const SEPARABLE_PREFIXES = [
   "auseinander", "gegenüber", "entgegen", "zusammen", "voran", "voraus", "vorbei", "vorüber",
   "herunter", "hinunter", "herüber", "hinüber", "herauf", "hinauf", "heraus", "hinaus",
@@ -68,9 +62,6 @@ const SEPARABLE_PREFIXES = [
   "fort", "her", "hin", "weg", "um", "durch", "über", "unter", "wieder", "statt", "frei",
 ];
 
-// Splits a separable verb into its detachable prefix and stem, e.g. "anrufen" -> { prefix: "an",
-// stem: "rufen" }. Only splits when a known prefix leaves a non-empty stem; otherwise the whole
-// word is the stem with no prefix, so callers can render it unchanged.
 export function separableParts(de) {
   const s = String(de || "").trim();
   const lower = s.toLowerCase();
@@ -86,29 +77,22 @@ export function fullPhrase(question, correctText) {
   const stem = `${question?.article ? question.article + " " : ""}${question?.de || ""}`.trim();
   if (!correctText) return stem;
 
-  // Legacy / robustness: if the option already contains the target word, return it unchanged.
-  const normStem = stem.toLowerCase().replace(/\s+/g, " ");
+´  const normStem = stem.toLowerCase().replace(/\s+/g, " ");
   const normText = correctText.toLowerCase().replace(/\s+/g, " ");
   if (normText.includes(normStem)) return correctText;
 
   if (question?.cat === "Reflexivverb") {
-    // Fixed reflexive frame: "sich" [partner] [verb], e.g. "sich über das Geschenk freuen".
     const { pron, verb } = reflexiveParts(question?.de);
     return `${pron} ${correctText} ${verb}`.replace(/\s+/g, " ").trim();
   }
 
   if (question?.cat === "Trennbares Verb") {
-    // Separable verb: stem [partner] prefix, e.g. "rufen den Arzt an".
-    const { prefix, stem } = separableParts(question?.de);
-    return `${stem} ${correctText} ${prefix}`.replace(/\s+/g, " ").trim();
+    return `${correctText} ${stem}`.replace(/\s+/g, " ").trim();
   }
 
   const isAdj = question?.cat === "Adjektiv";
   if (question?.partnerLabel === "Nomen") {
-    // Blank is before the word: [partner] [word]
-    // Adjectives need a copula to form a grammatical sentence.
     return isAdj ? `${correctText} ist ${stem}` : `${correctText} ${stem}`;
   }
-  // Blank is after the word: [word] [partner]
   return `${stem} ${correctText}`;
 }
