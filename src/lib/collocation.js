@@ -77,7 +77,7 @@ export function fullPhrase(question, correctText) {
   const stem = `${question?.article ? question.article + " " : ""}${question?.de || ""}`.trim();
   if (!correctText) return stem;
 
-´  const normStem = stem.toLowerCase().replace(/\s+/g, " ");
+  const normStem = stem.toLowerCase().replace(/\s+/g, " ");
   const normText = correctText.toLowerCase().replace(/\s+/g, " ");
   if (normText.includes(normStem)) return correctText;
 
