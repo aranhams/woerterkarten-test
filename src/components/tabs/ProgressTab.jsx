@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { FOLDER_PAGE } from "../../lib/constants";
-import { getProgressReport, getStudentProgressDetail } from "../../lib/api";
+import { getProgressReport, getStudentProgressDetail, getWeakCollocations } from "../../lib/api";
 import { loadAllClasses } from "../../data/loaders";
 import { clearDataCache } from "../../data/cache";
 
@@ -27,6 +27,7 @@ function flagsFor(r) {
   if (hard >= HARD_FLAG) flags.push("ins Stocken geraten");
   if ((r.regressRepeat || 0) >= 1 || (r.regressWords || 0) >= REGRESS_WORDS) flags.push("Gelerntes rutscht ab");
   if (r.started >= MIN_STARTED && r.pct < LOW_SECURE_PCT && hard > 0) flags.push("wenig gefestigt");
+  if ((r.collocHard || 0) >= 2) flags.push("Wortverbindungen schwierig");
   return flags;
 }
 
@@ -65,6 +66,7 @@ const REASON_HELP = {
   "ins stocken geraten": "Mehrere Wörter werden wiederholt vergessen (≥ 3× Nochmal) und sind noch nicht gefestigt.",
   "aufgestaute wiederh.": "Viele bereits gelernte Karten sind zur Wiederholung überfällig.",
   "inaktiv": "Seit Längerem nicht mehr geübt — oder noch nie gestartet.",
+  "wortverbindungen schwierig": "Mehrere Wortverbindungen werden wiederholt falsch beantwortet und sind noch nicht gefestigt.",
 };
 const reasonHelp = (label) => REASON_HELP[String(label || "").toLowerCase()] || undefined;
 
@@ -107,6 +109,49 @@ function StruggleChart({ hardWords }) {
         <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
           <div style={{ height: 15, width: `${(h.stuck / max) * 100}%`, minWidth: 4, background: C.struggle, borderRadius: 4 }}
             title={`${h.stuck} von ${h.started} Schülern haben dieses Wort oft vergessen (≥ 3× „Nochmal") und noch nicht gefestigt`} />
+          <span style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 700 }}>{h.stuck}</span>
+        </div>
+      </div>
+    ))}
+  </div>;
+}
+
+function WeakCollocations({ classId }) {
+  const [state, setState] = useState({ loading: true });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true });
+    (async () => {
+      try {
+        const r = await getWeakCollocations(classId);
+        if (!cancelled) setState({ loading: false, weak: r.weak || [], readyCount: r.readyCount || 0 });
+      } catch (e) {
+        if (!cancelled) setState({ loading: false, error: e.message || "Fehler" });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [classId]);
+
+  if (state.loading) return <p style={mutedP}>Lädt…</p>;
+  if (state.error) return <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Wortverbindungen konnten nicht geladen werden.</p>;
+  if (state.readyCount === 0) {
+    return <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Noch keine übungsbereiten Wortverbindungen. Gib welche im Verwalten-Bereich unter Wortverbindungen frei.</p>;
+  }
+  if (state.weak.length === 0) {
+    return <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>👍 Keine schwierigen Wortverbindungen — {state.readyCount} übungsbereit.</p>;
+  }
+  const max = Math.max(...state.weak.map((h) => h.stuck), 1);
+  return <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    {state.weak.slice(0, 5).map((h) => (
+      <div key={h.wordId} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ width: 116, flexShrink: 0, fontSize: 13, textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+          title={`${h.article ? h.article + " " : ""}${h.de}${h.answer ? ` → ${h.answer}` : ""}`}>
+          {h.article && <span style={{ color: "var(--accent)", fontStyle: "italic" }}>{h.article} </span>}{h.de}
+        </div>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
+          <div style={{ height: 15, width: `${(h.stuck / max) * 100}%`, minWidth: 4, background: C.struggle, borderRadius: 4 }}
+            title={`${h.stuck} von ${h.started} Schülern haben diese Verbindung oft verwechselt (≥ 3× falsch) und noch nicht gefestigt`} />
           <span style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 700 }}>{h.stuck}</span>
         </div>
       </div>
@@ -371,6 +416,10 @@ export function ProgressTab({ session }) {
     .filter((x) => x.risk.score >= RISK_MIN)
     .sort((a, b) => b.risk.score - a.risk.score);
   const attentionUids = new Set(attention.map((x) => x.r.uid));
+
+  const studentsWithHardColloc = assignedRows
+    .filter((r) => (r.collocHard || 0) > 0)
+    .sort((a, b) => (b.collocHard || 0) - (a.collocHard || 0) || a.username.localeCompare(b.username));
   const others = withFlags
     .filter((x) => !attentionUids.has(x.r.uid))
     .map((x) => ({ ...x, risk: x.r.assigned > 0 ? riskFor(x.r, now).score : null }))
@@ -520,6 +569,9 @@ export function ProgressTab({ session }) {
             {streakLeaders.length > 0 && <StreakLeaders rows={streakLeaders} />}
           </div>
         )}
+
+        <div style={{ borderTop: "1.5px solid var(--ivory-dark)", margin: "22px 0" }} />
+
         {}
         <div className="sec-label">Braucht Aufmerksamkeit ({attention.length})</div>
         {attention.length === 0 ? (
@@ -533,6 +585,36 @@ export function ProgressTab({ session }) {
           </div>
         </>)}
 
+        <div className="sec-label" style={{ marginTop: 18 }}>🔗 Schwierige Wortverbindungen — Schüler ({studentsWithHardColloc.length})</div>
+        {studentsWithHardColloc.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 16 }}>👍 Keine Schüler mit schwierigen Wortverbindungen.</p>
+        ) : (
+          <div className="word-list" style={{ marginBottom: 12 }}>
+            {studentsWithHardColloc.map((r) => (
+              <div key={r.uid} className="word-item" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                  <div className="wi-text">
+                    <div className="wi-de">{r.username}</div>
+                    <div className="wi-ru">{r.collocHard} schwierige Verbindung{r.collocHard !== 1 ? "en" : ""} · {r.collocMastered || 0}/{r.collocTotal || 0} gefestigt</div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.struggle, whiteSpace: "nowrap" }}>{r.collocHard}</span>
+                </div>
+                {r.collocHardWords && r.collocHardWords.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 10px", fontSize: 12 }}>
+                    {r.collocHardWords.map((w) => (
+                      <span key={w.wordId} style={{ color: "var(--ink-soft)", background: "var(--ivory-dark)", padding: "2px 8px", borderRadius: 12 }}>
+                        {w.article && <span style={{ color: "var(--accent)", fontStyle: "italic" }}>{w.article} </span>}
+                        {w.de || w.wordId}
+                        <span style={{ color: C.struggle, marginLeft: 5, fontWeight: 700 }}>×{w.nm}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         <button className="btn-sm" style={{ marginBottom: 22 }} onClick={() => setShowAll((s) => !s)}>
           {showAll ? `▲ ${otherLabel} ausblenden` : `▾ ${otherLabel} (${others.length})`}
         </button>
@@ -543,6 +625,8 @@ export function ProgressTab({ session }) {
               : others.map(({ r, flags, risk }) => <StudentRow key={r.uid} r={r} flags={flags} risk={risk} />)}
           </div>
         )}
+
+        <div style={{ borderTop: "1.5px solid var(--ivory-dark)", margin: "22px 0" }} />
 
         {}
         <div className="sec-label">Ordner-Abdeckung</div>
@@ -565,6 +649,8 @@ export function ProgressTab({ session }) {
           </div>
         )}
 
+        <div style={{ borderTop: "1.5px solid var(--ivory-dark)", margin: "22px 0" }} />
+
         {}
         <div className="sec-label">Schwierige Wörter</div>
         {report.hardWords.length === 0 ? (
@@ -573,6 +659,10 @@ export function ProgressTab({ session }) {
           <StruggleChart hardWords={report.hardWords} />
         )}
         {(report.hardPrivateWords || []).length > 0 && <PrivateStruggleList rows={report.hardPrivateWords} />}
+
+        {}
+        <div className="sec-label" style={{ marginTop: 22 }}>🔗 Schwierige Wortverbindungen</div>
+        <WeakCollocations key={`${classId}:${refreshKey}`} classId={classId} />
       </>)}
 
       <p style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 22, textAlign: "right" }}>

@@ -162,6 +162,16 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Collocation editorial store: one doc per opted-in word, holding candidates
+    // (suggested/approved/rejected) and stored AI distractors. Teacher-read so the review
+    // UI can load it directly; write only via /api/collocations (Admin SDK). Students have
+    // NO read path — the practice endpoint returns a server-projected, approved-only view,
+    // so unreviewed AI content can never reach a learner.
+    match /collocation_sets/{wordId} {
+      allow read:  if isTeacher();
+      allow write: if false;
+    }
+
     match /rate_limits/{doc} { allow read, write: if false; }
 
     // Shared pronunciation lexicon, keyed by a hash of the German word. Server-only:

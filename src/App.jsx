@@ -15,11 +15,12 @@ import { ProgressTab } from "./components/tabs/ProgressTab";
 import { StudentsTab } from "./components/tabs/StudentsTab";
 import { AdminTab } from "./components/tabs/AdminTab";
 import { DescribeTab } from "./components/tabs/DescribeTab";
+import { CollocationsPracticeTab } from "./components/tabs/CollocationsPracticeTab";
 
 const TAB_KEY = "dw_tab";
 function tabAllowed(t, { isTeacher, isAdmin, studentView }) {
   const learner = !isTeacher || studentView;
-  if (t === "learn" || t === "words" || t === "folders") return learner;
+  if (t === "learn" || t === "words" || t === "folders" || t === "collearn") return learner;
   if (t === "manage" || t === "kurse" || t === "progress" || t === "describe") return isTeacher;
   if (t === "admin") return isAdmin;
   return false;
@@ -82,6 +83,7 @@ export default function App() {
   const navGroups = [
     learnerTabs && { cap: "Lernen", tabs: [
       { id: "learn", label: "🃏 Lernen" },
+      { id: "collearn", label: "🔗 Verbindungen" },
       { id: "words", label: "📋 Wörter" },
       { id: "folders", label: "📁 Ordner" },
     ] },
@@ -112,6 +114,7 @@ export default function App() {
       ))}
     </nav>
     {tab === "learn" && learnerTabs && <LearnTab session={session} />}
+    {tab === "collearn" && learnerTabs && <CollocationsPracticeTab session={session} />}
     {tab === "words" && learnerTabs && <WordsTab session={session} />}
     {tab === "folders" && learnerTabs && <FoldersTab session={session} />}
     {tab === "manage" && session.isTeacher && <ManageTab session={session} />}

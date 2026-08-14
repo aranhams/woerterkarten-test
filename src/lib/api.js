@@ -84,6 +84,34 @@ async function pronounce(payload) {
 export const requestPronunciation = (wordId, scope) => pronounce({ action: "word", wordId, scope });
 export const resyncPronunciation = (wordIds) => pronounce({ action: "resync", wordIds });
 
+export async function collocationSync(action, payload = {}) {
+  const token = await idToken();
+  const res = await fetch("/api/collocations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Fehler");
+  return data;
+}
+
+export const getWeakCollocations = (classId) => collocationSync("weak-collocations", { classId });
+export const bulkActivateCollocations = (wordIds) => collocationSync("bulk-opt-in-ids", { wordIds });
+export const bulkDeactivateCollocations = (wordIds) => collocationSync("bulk-opt-out-ids", { wordIds });
+
+export async function getCollocationPractice({ folderId = null } = {}) {
+  const token = await idToken();
+  const res = await fetch("/api/collocations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ action: "practice-set", folderId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Fehler");
+  return data;
+}
+
 export async function claimTeacher(token, code) {
   const res = await fetch("/api/claim-teacher", {
     method: "POST",
