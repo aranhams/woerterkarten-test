@@ -20,6 +20,44 @@ export function isHardFor(word, p) {
   return !!p && (p.nm || 0) >= HARD_NOCHMAL && effLevel(word, p) < MASTERY_LEVEL;
 }
 
+// Mirror of src/lib/article.js resolveArticleAnswer: Wiktionary genus wins, else
+// the teacher's der/die/das, else the noun is not quizzable (null).
+const GENUS_ARTICLE = { m: "der", f: "die", n: "das", 0: "die", "0": "die" };
+const DEFINITE_ARTICLES = new Set(["der", "die", "das"]);
+
+export function resolveArticleAnswer(word) {
+  const genus = word && word.pron ? word.pron.genus : null;
+  const fromGenus = genus != null ? GENUS_ARTICLE[genus] : null;
+  if (fromGenus) return fromGenus;
+  const teacher = String(word?.article ?? "").trim().toLowerCase();
+  return DEFINITE_ARTICLES.has(teacher) ? teacher : null;
+}
+
+// Class-wide "hardest articles": for every quizzable noun, count students who keep
+// getting it wrong (nm >= HARD_NOCHMAL and not yet mastered), mirroring hardWords.
+export function summarizeHardArticles(wordById, progressByUid, { top = 15 } = {}) {
+  const stuckByWord = new Map();
+  for (const progressData of progressByUid.values()) {
+    for (const [wordId, p] of Object.entries(progressData || {})) {
+      const w = wordById.get(wordId);
+      if (!w || !p) continue;
+      if (resolveArticleAnswer(w) == null) continue;
+      const rec = stuckByWord.get(wordId) || { stuck: 0, started: 0 };
+      rec.started++;
+      if (isHardFor(w, p)) rec.stuck++;
+      stuckByWord.set(wordId, rec);
+    }
+  }
+  return [...stuckByWord.entries()]
+    .map(([wordId, rec]) => {
+      const w = wordById.get(wordId) || {};
+      return { wordId, de: w.de || "", article: resolveArticleAnswer(w) || w.article || "", stuck: rec.stuck, started: rec.started };
+    })
+    .filter((h) => h.stuck > 0)
+    .sort((a, b) => b.stuck - a.stuck || (b.stuck / b.started) - (a.stuck / a.started))
+    .slice(0, top);
+}
+
 export function lastAnsweredAt(p) {
   if (!p || !Number.isFinite(p.due) || !Number.isFinite(p.level)) return null;
   const iv = INTERVALS[p.level];

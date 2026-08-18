@@ -4,7 +4,7 @@ import { requestLogger } from "./_log.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { recomputeDenorm, genUniqueJoinCode, makeCode, syncWordManifests, dropFromManifests } from "./_classes.js";
 import { resolveUid } from "./_users.js";
-import { summarizeStudent, summarizeActivity, summarizeTrend, dayKey, effLevel, isDueEff, isHardFor, MASTERY_LEVEL } from "./_progress.js";
+import { summarizeStudent, summarizeActivity, summarizeTrend, dayKey, effLevel, isDueEff, isHardFor, resolveArticleAnswer, summarizeHardArticles, MASTERY_LEVEL } from "./_progress.js";
 import { MASTERY_LEVEL as COLL_MASTERY_LEVEL } from "./_collocations.js";
 
 const MAX_FAILS = 40;
@@ -398,6 +398,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
         ...roster.map((u) => db.doc(`users/${u}`)),
         ...roster.map((u) => db.doc(`users/${u}/meta/activity`)),
         ...roster.map((u) => db.doc(`users/${u}/meta/collocationProgress`)),
+        ...roster.map((u) => db.doc(`users/${u}/meta/articleProgress`)),
       ];
       const snaps = n ? await db.getAll(...refs) : [];
       const personalSnaps = n
@@ -415,12 +416,14 @@ async function dispatch({ db, auth, user, action, body, L }) {
       const stuckByWord = new Map();
       const hardPrivate = [];
       const folderRows = new Map();
+      const articleProgressByUid = new Map();
       for (let i = 0; i < n; i++) {
         const uid = roster[i];
         const progSnap = snaps[i];
         const userSnap = snaps[n + i];
         const actSnap = snaps[2 * n + i];
         const collocSnap = snaps[3 * n + i];
+        const articleSnap = snaps[4 * n + i];
         const progressData = (progSnap && progSnap.exists ? progSnap.data()?.data : null) || {};
         const username = (userSnap && userSnap.exists ? userSnap.data()?.username : null) || uid.slice(0, 6);
         const actData = (actSnap && actSnap.exists) ? actSnap.data() : null;
@@ -448,11 +451,24 @@ async function dispatch({ db, auth, user, action, body, L }) {
         }
         collocHardWords.sort((a, b) => b.nm - a.nm || (a.de || "").localeCompare(b.de || ""));
 
+        const articleData = (articleSnap && articleSnap.exists ? articleSnap.data()?.data : null) || {};
+        articleProgressByUid.set(uid, articleData);
+        let articleTotal = 0, articleHard = 0, articleMastered = 0;
+        for (const [wordId, p] of Object.entries(articleData)) {
+          if (!p) continue;
+          const w = wordById.get(wordId);
+          if (!w || resolveArticleAnswer(w) == null) continue;
+          articleTotal++;
+          if (effLevel(w, p) >= MASTERY_LEVEL) articleMastered++;
+          else if (isHardFor(w, p)) articleHard++;
+        }
+
         rows.push({
           uid, username, ...summarizeStudent(assigned, progressData, now),
           streak: act.current, reviews30: act.reviews, correct30: act.correct,
           trendDelta: trend.delta, trendSamples: trend.samples,
           collocTotal, collocHard, collocMastered, collocHardWords,
+          articleTotal, articleHard, articleMastered,
         });
 
         for (const [wordId, p] of Object.entries(progressData)) {
@@ -529,8 +545,10 @@ async function dispatch({ db, auth, user, action, body, L }) {
         .sort((a, b) => b.nm - a.nm || a.username.localeCompare(b.username))
         .slice(0, 20);
 
+      const hardArticles = summarizeHardArticles(wordById, articleProgressByUid);
+
       L.log("info", "class.progress-report", { uid: user.uid, classId: id, rosterSize: rosterAll.length, words: words.length });
-      const payload = { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, hardPrivateWords, readiness };
+      const payload = { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, hardPrivateWords, hardArticles, readiness };
       reportCache.set(id, { at: Date.now(), payload });
       return payload;
     }

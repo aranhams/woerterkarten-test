@@ -28,6 +28,7 @@ function flagsFor(r) {
   if ((r.regressRepeat || 0) >= 1 || (r.regressWords || 0) >= REGRESS_WORDS) flags.push("Gelerntes rutscht ab");
   if (r.started >= MIN_STARTED && r.pct < LOW_SECURE_PCT && hard > 0) flags.push("wenig gefestigt");
   if ((r.collocHard || 0) >= 2) flags.push("Wortverbindungen schwierig");
+  if ((r.articleHard || 0) >= 2) flags.push("Artikel schwierig");
   return flags;
 }
 
@@ -67,6 +68,7 @@ const REASON_HELP = {
   "aufgestaute wiederh.": "Viele bereits gelernte Karten sind zur Wiederholung überfällig.",
   "inaktiv": "Seit Längerem nicht mehr geübt — oder noch nie gestartet.",
   "wortverbindungen schwierig": "Mehrere Wortverbindungen werden wiederholt falsch beantwortet und sind noch nicht gefestigt.",
+  "artikel schwierig": "Bei mehreren Nomen wird der Artikel wiederholt falsch beantwortet und ist noch nicht gefestigt.",
 };
 const reasonHelp = (label) => REASON_HELP[String(label || "").toLowerCase()] || undefined;
 
@@ -420,6 +422,9 @@ export function ProgressTab({ session }) {
   const studentsWithHardColloc = assignedRows
     .filter((r) => (r.collocHard || 0) > 0)
     .sort((a, b) => (b.collocHard || 0) - (a.collocHard || 0) || a.username.localeCompare(b.username));
+  const studentsWithHardArticle = assignedRows
+    .filter((r) => (r.articleHard || 0) > 0)
+    .sort((a, b) => (b.articleHard || 0) - (a.articleHard || 0) || a.username.localeCompare(b.username));
   const others = withFlags
     .filter((x) => !attentionUids.has(x.r.uid))
     .map((x) => ({ ...x, risk: x.r.assigned > 0 ? riskFor(x.r, now).score : null }))
@@ -612,6 +617,23 @@ export function ProgressTab({ session }) {
           </div>
         )}
 
+        <div className="sec-label" style={{ marginTop: 18 }}>🔤 Schwierige Artikel — Schüler ({studentsWithHardArticle.length})</div>
+        {studentsWithHardArticle.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 16 }}>👍 Keine Schüler mit schwierigen Artikeln.</p>
+        ) : (
+          <div className="word-list" style={{ marginBottom: 12 }}>
+            {studentsWithHardArticle.map((r) => (
+              <div key={r.uid} className="word-item" style={{ justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                <div className="wi-text">
+                  <div className="wi-de">{r.username}</div>
+                  <div className="wi-ru">{r.articleHard === 1 ? "1 schwieriger Artikel" : `${r.articleHard} schwierige Artikel`} · {r.articleMastered || 0}/{r.articleTotal || 0} gefestigt</div>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.struggle, whiteSpace: "nowrap" }}>{r.articleHard}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         <button className="btn-sm" style={{ marginBottom: 22 }} onClick={() => setShowAll((s) => !s)}>
           {showAll ? `▲ ${otherLabel} ausblenden` : `▾ ${otherLabel} (${others.length})`}
         </button>
@@ -660,6 +682,14 @@ export function ProgressTab({ session }) {
         {}
         <div className="sec-label" style={{ marginTop: 22 }}>🔗 Schwierige Wortverbindungen</div>
         <WeakCollocations key={`${classId}:${refreshKey}`} classId={classId} />
+
+        {}
+        <div className="sec-label" style={{ marginTop: 22 }}>🔤 Schwierige Artikel</div>
+        {(report.hardArticles || []).length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Noch keine schwierigen Artikel — sie erscheinen, sobald Schüler den Artikel eines Nomens mehrmals falsch beantworten (≥ 3× „Nochmal").</p>
+        ) : (
+          <StruggleChart hardWords={report.hardArticles} />
+        )}
       </>)}
 
       <p style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 22, textAlign: "right" }}>

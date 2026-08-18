@@ -33,7 +33,7 @@ function wordRef(db, user, isTeacher, wordId, scope) {
 
 function isFresh(word, de) {
   const p = word.pron;
-  return !!p && p.v === PRON_V && p.de === de && p.st === "ready";
+  return !!p && p.v === PRON_V && p.de === de && p.st === "ready" && "genus" in p;
 }
 
 async function resolveWord(snap) {

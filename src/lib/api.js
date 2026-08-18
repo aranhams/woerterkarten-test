@@ -115,6 +115,18 @@ export async function getCollocationPractice({ folderId = null } = {}) {
   return data;
 }
 
+export async function getArticleQuiz({ folderId = null } = {}) {
+  const token = await idToken();
+  const res = await fetch("/api/article-quiz", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ folderId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Fehler");
+  return data;
+}
+
 export async function claimTeacher(token, code) {
   const res = await fetch("/api/claim-teacher", {
     method: "POST",

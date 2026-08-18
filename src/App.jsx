@@ -16,11 +16,18 @@ import { StudentsTab } from "./components/tabs/StudentsTab";
 import { AdminTab } from "./components/tabs/AdminTab";
 import { DescribeTab } from "./components/tabs/DescribeTab";
 import { CollocationsPracticeTab } from "./components/tabs/CollocationsPracticeTab";
+import { ArticleQuizTab } from "./components/tabs/ArticleQuizTab";
 
 const TAB_KEY = "dw_tab";
+const LEARN_MODE_KEY = "dw_learn_mode";
+const LEARN_MODES = [
+  { id: "cards", label: "🃏 Wörterkarten" },
+  { id: "article", label: "🔤 Artikel" },
+  { id: "collearn", label: "🔗 Verbindungen" },
+];
 function tabAllowed(t, { isTeacher, isAdmin, studentView }) {
   const learner = !isTeacher || studentView;
-  if (t === "learn" || t === "words" || t === "folders" || t === "collearn") return learner;
+  if (t === "learn" || t === "words" || t === "folders") return learner;
   if (t === "manage" || t === "kurse" || t === "progress" || t === "describe") return isTeacher;
   if (t === "admin") return isAdmin;
   return false;
@@ -32,6 +39,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
   const [studentView, setStudentView] = useState(() => localStorage.getItem("dw_studentview") === "1");
+  const [learnMode, setLearnMode] = useState(() => {
+    const saved = localStorage.getItem(LEARN_MODE_KEY);
+    return LEARN_MODES.some((m) => m.id === saved) ? saved : "cards";
+  });
   const navRef = useRef(null);
 
   useEffect(() => {
@@ -62,6 +73,8 @@ export default function App() {
     if (!loading && session) localStorage.setItem(TAB_KEY, tab);
   }, [tab, loading, session]);
 
+  useEffect(() => { localStorage.setItem(LEARN_MODE_KEY, learnMode); }, [learnMode]);
+
   useEffect(() => {
     const el = navRef.current?.querySelector(".nav-tab.active");
     el?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
@@ -83,7 +96,6 @@ export default function App() {
   const navGroups = [
     learnerTabs && { cap: "Lernen", tabs: [
       { id: "learn", label: "🃏 Lernen" },
-      { id: "collearn", label: "🔗 Verbindungen" },
       { id: "words", label: "📋 Wörter" },
       { id: "folders", label: "📁 Ordner" },
     ] },
@@ -110,11 +122,21 @@ export default function App() {
               <button key={t.id} className={`nav-tab${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>{t.label}</button>
             ))}
           </div>
+          {g.cap === "Lernen" && tab === "learn" && (
+            <div className="learn-subnav">
+              {LEARN_MODES.map((m) => (
+                <button key={m.id} className={`learn-subtab${learnMode === m.id ? " active" : ""}`} onClick={() => setLearnMode(m.id)}>{m.label}</button>
+              ))}
+            </div>
+          )}
         </div>
       ))}
     </nav>
-    {tab === "learn" && learnerTabs && <LearnTab session={session} />}
-    {tab === "collearn" && learnerTabs && <CollocationsPracticeTab session={session} />}
+    {tab === "learn" && learnerTabs && (<>
+      {learnMode === "cards" && <LearnTab session={session} />}
+      {learnMode === "article" && <ArticleQuizTab session={session} />}
+      {learnMode === "collearn" && <CollocationsPracticeTab session={session} />}
+    </>)}
     {tab === "words" && learnerTabs && <WordsTab session={session} />}
     {tab === "folders" && learnerTabs && <FoldersTab session={session} />}
     {tab === "manage" && session.isTeacher && <ManageTab session={session} />}

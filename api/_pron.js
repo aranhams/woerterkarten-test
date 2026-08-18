@@ -84,6 +84,32 @@ export function extractIpaVariants(section) {
     .filter((v) => v && v.length <= MAX_IPA_LEN && IPA_ALLOWED.test(v));
 }
 
+export const GENUS_ARTICLE = { m: "der", f: "die", n: "das", 0: "die" };
+
+export function extractGenus(section) {
+  const lines = String(section ?? "").split("\n");
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^==+/.test(lines[i]) && /\{\{Wortart\|Substantiv\|Deutsch\}\}/.test(lines[i])) { start = i; break; }
+  }
+  if (start === -1) return { genus: null, ambiguous: false, isNoun: false };
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^==+/.test(lines[i])) { end = i; break; }
+  }
+  const headline = lines[start];
+  if (/\{\{(mf|mn|fn|nf|fm|nm)\}\}/.test(headline)) return { genus: null, ambiguous: true, isNoun: true };
+
+  const tags = new Set([...headline.matchAll(/\{\{([mfn])\}\}/g)].map((m) => m[1]));
+  const block = lines.slice(start, end).join("\n");
+  for (const m of block.matchAll(/\|\s*Genus(?:\s*\d+)?\s*=\s*([mfn0])/g)) tags.add(m[1]);
+
+  if (tags.size === 0) return { genus: null, ambiguous: false, isNoun: true };
+  if (tags.size > 1) return { genus: null, ambiguous: true, isNoun: true };
+  return { genus: [...tags][0], ambiguous: false, isNoun: true };
+}
+
 const MAX_COLLOC_PARTNER = 40;
 const DEFAULT_COLLOC_MAX = 24;
 const collNorm = (s) => nfc(s).toLowerCase();
@@ -189,17 +215,21 @@ async function lookupWiktionary(de, L) {
   }
   const { wikitext, revid } = fetched;
 
+  const section = germanSection(wikitext);
+  const g = section ? extractGenus(section) : { genus: null };
+  const genus = g.genus;
+
   const parsed = parseWiktionary(wikitext, word);
   if (!parsed) {
     L.log("info", "pron.wiktionary_miss", { reason: "no_german_ipa" });
-    return null;
+    return { hyph: null, ipa: null, bet: null, genus, revid };
   }
   if (parsed.ambiguous) {
     L.log("info", "pron.homograph_skip", { word });
-    return null;
+    return { hyph: null, ipa: null, bet: null, genus, revid };
   }
   if (parsed.hyph && !parsed.bet) L.log("info", "pron.derive_abort", { word });
-  return { ...parsed, revid };
+  return { hyph: parsed.hyph, ipa: parsed.ipa, bet: parsed.bet, genus, revid };
 }
 
 export function buildSsml(de, voice) {
@@ -303,6 +333,7 @@ function toPronMap(entry) {
     hyph: entry.hyph ?? null,
     ipa: entry.ipa ?? null,
     bet: entry.bet ?? null,
+    genus: entry.genus ?? null,
     url: entry.url ?? null,
     src: entry.src ?? "none",
     v: PRON_V,
@@ -315,14 +346,14 @@ export async function ensurePron(db, de, L) {
   const snap = await ref.get().catch(() => null);
   const cached = snap && snap.exists ? snap.data() : null;
 
-  if (cached && cached.v === PRON_V && cached.url && cached.src) {
+  if (cached && cached.v === PRON_V && cached.url && cached.src && cached.gc) {
     L.log("info", "pron.cache_hit", {});
     return { pron: toPronMap({ ...cached, de: word }), external: false };
   }
 
   const voice = voiceName(L);
   const audioKey = audioKeyFor(word, voice);
-  const skipWiki = !!(cached && cached.v === PRON_V && cached.src);
+  const skipWiki = !!(cached && cached.v === PRON_V && cached.src && cached.gc);
   const reusesAudio = !!(cached && cached.audioKey === audioKey && cached.url);
 
   const [wikiRes, audioRes] = await Promise.allSettled([
@@ -343,6 +374,8 @@ export async function ensurePron(db, de, L) {
         hyph: wiki?.hyph ?? null,
         ipa: wiki?.ipa ?? null,
         bet: wiki?.bet ?? null,
+        genus: wiki?.genus ?? null,
+        gc: true,
         src: wiki?.hyph ? "wiktionary" : "none",
         wikiRev: wiki?.revid ?? null,
         url,

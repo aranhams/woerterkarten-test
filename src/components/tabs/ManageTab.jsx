@@ -510,8 +510,10 @@ export function ManageTab({ session }) {
               onChange={(e) => onArticleChange(e.target.value)}
               onPaste={onArticlePaste}
               onBlur={() => setArticleTouched(true)}
+              onKeyDown={(e) => { if (e.key === "Enter" && de.trim()) addWord(); }}
             />
-            <input ref={deInputRef} placeholder="Deutsches Wort" value={de} maxLength={LIMIT.de} onChange={(e) => setDe(e.target.value)} />
+            <input ref={deInputRef} placeholder="Deutsches Wort" value={de} maxLength={LIMIT.de} onChange={(e) => setDe(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && de.trim()) addWord(); }} />
             <select value={folderId} onChange={(e) => {
               const v = e.target.value;
               if (v === "__new__") { setQuickFolder({ name: "", icon: "📁" }); setFolderId(""); }

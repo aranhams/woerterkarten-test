@@ -19,6 +19,7 @@ export function LearnTab({ session }) {
   const [idx, setIdx] = useState(0);
   const [direction, setDirection] = useState(() => localStorage.getItem("dw_dir") || "de2ru");
   const [filterFolder, setFilterFolder] = useState(session.isTeacher ? "" : "all");
+  const [sourceFilter, setSourceFilter] = useState("all");
   const [allWords, setAllWords] = useState([]);
   const [folders, setFolders] = useState([]);
   const [progress, setProgress] = useState({});
@@ -121,18 +122,21 @@ export function LearnTab({ session }) {
   const setDir = (d) => { setDirection(d); localStorage.setItem("dw_dir", d); setRevealed(false); setIdx(0); };
 
   const allFolders = filterFolder === "all" || filterFolder === "";
-  const scoped = allFolders || session.isTeacher
+  const matchSource = (w) => sourceFilter === "all" || (sourceFilter === "global" ? w.source === "global" : w.source !== "global");
+  const scoped = (allFolders || session.isTeacher
     ? allWords
-    : allWords.filter((w) => w.folderId === filterFolder);
+    : allWords.filter((w) => w.folderId === filterFolder)).filter(matchSource);
 
   const progressOf = (w) => (session.isTeacher ? TEACHER_PREVIEW : effProgress(w, progress[w.id]));
   const dueCards = scoped.filter((w) => isDue(progressOf(w)));
   const isLearned = (w) => (progressOf(w)?.level || 0) >= MASTERY_LEVEL;
 
-  const gStats = stats
+  const gStats = stats && sourceFilter !== "personal"
     ? (allFolders ? stats : (stats.perFolder && stats.perFolder[filterFolder]) || { total: 0, due: 0, learned: 0 })
     : null;
-  const personal = allWords.filter((w) => w.source !== "global" && (allFolders || w.folderId === filterFolder));
+  const personal = sourceFilter === "global"
+    ? []
+    : allWords.filter((w) => w.source !== "global" && (allFolders || w.folderId === filterFolder));
 
   const total = gStats ? gStats.total + personal.length : scoped.length;
   const learned = gStats
@@ -244,6 +248,11 @@ export function LearnTab({ session }) {
         {!session.isTeacher && <option value="all">📂 Alle Ordner</option>}
         {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
       </select>
+      {!session.isTeacher && <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setIdx(0); setRevealed(false); }}>
+        <option value="all">Alle Wörter</option>
+        <option value="personal">Meine Wörter</option>
+        <option value="global">Kurswörter</option>
+      </select>}
     </div>}
     {total > 0 && <div className="dir-toggle">
       <button className={`dir-btn${direction === "de2ru" ? " active" : ""}`} onClick={() => setDir("de2ru")}>Deutsch</button>
