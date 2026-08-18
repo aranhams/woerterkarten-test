@@ -385,8 +385,14 @@ export function WordsTab({ session }) {
         <div className="warn-box">
           <span className="warn-box-icon">⚠️</span>
           <span>
-            Du hast {PRIVATE_WORD_LIMIT} noch nicht gemeisterte eigene Wörter. Meistere zuerst einige davon,
-            um wieder neue anzulegen.
+            Du hast noch {unmasteredPrivate} Wörter{" "}
+            <span
+              className="tip"
+              title="Ein Wort ist gelernt, wenn du es dreimal richtig beantwortest. Dann hat es die Stufe 3 „sicher“ (⭐)."
+            >
+              nicht gelernt
+            </span>
+            . Lerne diese Wörter und dann kannst du neue hinzufügen.
           </span>
         </div>
       )}
