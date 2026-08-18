@@ -79,8 +79,6 @@ export const flushActivity = () => flushActivityNow();
 export async function healPersonalSearchFields(uid, words) {
   const todo = words.filter((w) => w.deL == null || w.deL !== lowerKey(w.de));
   for (const w of todo) {
-    // updatedAt/updatedBy must be re-stamped: rules validate the *merged* document, and a
-    // stored updatedAt that is not request.time fails `d.updatedAt == request.time`.
     const patch = {
       deL: lowerKey(w.de), ruL: lowerKey(w.ru),
       updatedAt: serverTimestamp(), updatedBy: uid,
@@ -117,8 +115,6 @@ export async function loadVisibleFolders(session) {
   return session.isTeacher ? await loadGlobalFolders() : await loadClassFolders(session.uid);
 }
 
-// Global words are no longer held in the full-collection cache (they arrive per page or
-// from /api/learn-queue), so only personal words have a cache entry left to patch.
 export function cachePron(session, word, pron) {
   if (word.source !== "global") cacheUpdate(`users/${session.uid}/words`, word.id, { pron });
 }

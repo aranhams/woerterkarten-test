@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { serverTimestamp } from "firebase/firestore";
-import { LIMIT, WORD_PAGE_SERVER } from "../../lib/constants";
+import { LIMIT, WORD_PAGE_SERVER, PRIVATE_WORD_LIMIT } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields, withTrans } from "../../lib/word";
-import { effProgress, lvlEmoji } from "../../lib/srs";
+import { effProgress, lvlEmoji, MASTERY_LEVEL } from "../../lib/srs";
 import { translateWord, requestPronunciation } from "../../lib/api";
 import {
   loadVisibleFolders, loadUserFolders, loadUserWords, loadProgress, cachePron,
@@ -30,7 +30,7 @@ export function WordsTab({ session }) {
   const [de, setDe] = useState(""); const [article, setArticle] = useState("");
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
-  const [search, setSearch] = useState(""); const [filterFolder, setFilterFolder] = useState("all");
+  const [search, setSearch] = useState(""); const [filterFolder, setFilterFolder] = useState("all"); const [sourceFilter, setSourceFilter] = useState("all");
   const [page, setPage] = useState(null);
   const [legacyPersonal, setLegacyPersonal] = useState(null);
   const [folders, setFolders] = useState([]);
@@ -43,23 +43,29 @@ export function WordsTab({ session }) {
   const [preview, setPreview] = useState(null);
   const [trans, setTrans] = useState({});
   const [counts, setCounts] = useState(null);
+  const [privateTotal, setPrivateTotal] = useState(null);
   const [pageIdx, setPageIdx] = useState(0);
+  const [selectedWords, setSelectedWords] = useState(new Set());
   const searchTimer = useRef(null);
   const searchSeq = useRef(0);
 
-  // Tabs unmount on switch, so component state is lost. Browsing state is kept in the
-  // module cache and revalidated with two count queries instead of re-reading the page.
-  const pageKey = (fid) => `words_page1:${session.uid}:${fid || "all"}`;
+  const pageKey = (fid, src = sourceFilter) => `words_page1:${session.uid}:${fid || "all"}:${src}`;
 
   const countOpts = (fid) => ({
     uid: session.uid, teacher: !!session.isTeacher,
     folderId: !fid || fid === "all" ? null : fid,
   });
 
-  // Always hits the server: validating a cached page against counts derived from that
-  // same page would compare it with itself and never detect drift.
-  async function liveCounts(fid) {
+  async function liveCounts(fid, src = sourceFilter) {
     const o = countOpts(fid);
+    if (src === "personal") {
+      const p = await countWords({ source: "personal", ...o });
+      return { g: 0, p };
+    }
+    if (src === "global") {
+      const g = await countWords({ source: "global", ...o });
+      return { g, p: 0 };
+    }
     const [g, p] = await Promise.all([
       countWords({ source: "global", ...o }),
       countWords({ source: "personal", ...o }),
@@ -67,25 +73,30 @@ export function WordsTab({ session }) {
     return { g, p };
   }
 
-  // Only safe right after a fresh load: an exhausted page is the whole result set.
-  function countsFor(fid, p) {
+  function countsFor(fid, p, src = sourceFilter) {
     if (p && p.exhausted && !p.q) {
+      if (src === "personal") return Promise.resolve({ g: 0, p: p.rows.filter((r) => r.source === "personal").length });
+      if (src === "global") return Promise.resolve({ g: p.rows.filter((r) => r.source === "global").length, p: 0 });
       return Promise.resolve({
         g: p.rows.filter((r) => r.source === "global").length,
         p: p.rows.filter((r) => r.source === "personal").length,
       });
     }
-    return liveCounts(fid);
+    return liveCounts(fid, src);
   }
 
   const countsMatch = (a, b) => a && b && a.g != null && a.p != null && a.g === b.g && a.p === b.p;
 
-  function basePageState(over = {}) {
+  function basePageState(over = {}, src = sourceFilter) {
+    let sources;
+    if (legacyPersonal) sources = ["global"];
+    else if (src === "all") sources = ["global", "personal"];
+    else sources = [src];
     return newPageState({
       uid: session.uid,
       teacher: !!session.isTeacher,
       folderId: filterFolder === "all" ? null : filterFolder,
-      sources: legacyPersonal ? ["global"] : ["global", "personal"],
+      sources,
       ...over,
     });
   }
@@ -98,6 +109,8 @@ export function WordsTab({ session }) {
       ]);
       setFolders([...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))]);
       setProgress(prog);
+      countWords({ uid: session.uid, teacher: false, source: "personal", folderId: null })
+        .then((n) => { if (n != null) setPrivateTotal(n); });
 
       let personal = null;
       if (!ready) {
@@ -129,18 +142,16 @@ export function WordsTab({ session }) {
     })();
   }, []);
 
-  // Keeps the cached browse state in step with local edits, adds and deletes, so a tab
-  // switch restores what the student last saw rather than a stale page.
   useEffect(() => {
     if (!page || page.q || legacyPersonal || !counts) return;
     cacheSet(pageKey(page.folderId), { state: page, counts });
   }, [page, counts, legacyPersonal]);
 
-  async function reloadPage(over = {}) {
+  async function reloadPage(over = {}, src = sourceFilter) {
     setBusy(true);
-    const next = await loadNextPage(basePageState(over));
+    const next = await loadNextPage(basePageState(over, src));
     setPage(next); setPageIdx(0);
-    if (!over.q && !legacyPersonal) setCounts(await countsFor(over.folderId ?? filterFolder, next));
+    if (!over.q && !legacyPersonal) setCounts(await countsFor(over.folderId ?? filterFolder, next, src));
     setBusy(false);
   }
 
@@ -182,6 +193,21 @@ export function WordsTab({ session }) {
     reloadPage({ folderId: v === "all" ? null : v, q });
   }
 
+  async function onSourceFilterChange(v) {
+    setSourceFilter(v);
+    const q = search.trim();
+    if (!q && !legacyPersonal) {
+      const hit = cacheGet(pageKey(filterFolder, v));
+      if (hit) {
+        setBusy(true);
+        const now = await liveCounts(filterFolder, v);
+        setBusy(false);
+        if (countsMatch(now, hit.counts)) { setPage(hit.state); setCounts(now); setPageIdx(0); return; }
+      }
+    }
+    reloadPage({ folderId: filterFolder === "all" ? null : filterFolder, q }, v);
+  }
+
   async function autoTranslate() {
     if (!de.trim()) return;
     setTranslating(true);
@@ -200,14 +226,46 @@ export function WordsTab({ session }) {
     setLegacyPersonal((prev) => (prev ? prev.map((w) => (w.id === id ? { ...w, ...patch } : w)) : prev));
   }
 
+  function toggleWordSelection(id) {
+    setSelectedWords((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllVisible() {
+    const ownIds = visible.filter((w) => w.source === "personal").map((w) => w.id);
+    const allSelected = ownIds.length > 0 && ownIds.every((id) => selectedWords.has(id));
+    setSelectedWords((prev) => {
+      const next = new Set(prev);
+      if (allSelected) ownIds.forEach((id) => next.delete(id));
+      else ownIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
+  function clearSelection() { setSelectedWords(new Set()); }
+
   function applyPron(wordId, pron) {
     patchLocal(wordId, { pron });
     const word = visible.find((w) => w.id === wordId);
     if (word) cachePron(session, word, pron);
   }
 
+  const masteredPrivate = Object.entries(progress)
+    .filter(([id, p]) => id.startsWith("p_") && (p?.level || 0) >= MASTERY_LEVEL).length;
+  const unmasteredPrivate = privateTotal == null
+    ? 0 : Math.max(0, privateTotal - Math.min(masteredPrivate, privateTotal));
+  const canCreate = privateTotal == null || unmasteredPrivate < PRIVATE_WORD_LIMIT;
+
   async function addWord() {
     if (!de.trim() || !ru.trim()) return;
+    if (!canCreate) {
+      alert(`Du kannst neue Wörter erst anlegen, wenn du deine aktuellen beherrschst. Du darfst höchstens ${PRIVATE_WORD_LIMIT} noch nicht gemeisterte eigene Wörter haben.`);
+      return;
+    }
     if (imageUrl && !validImageUrl(imageUrl)) { alert("Ungültige Bild-URL."); return; }
     const id = `p_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const w = {
@@ -223,6 +281,7 @@ export function WordsTab({ session }) {
       setPage((p) => (p ? { ...p, rows: [row, ...p.rows] } : p));
       setLegacyPersonal((prev) => (prev ? [row, ...prev] : prev));
       setCounts((c) => (c ? { ...c, p: c.p + 1 } : c));
+      setPrivateTotal((n) => (n == null ? n : n + 1));
       setDe(""); setArticle(""); setRu(""); setExample(""); setFolderId(""); setImageUrl("");
       requestPronunciation(id, "personal").catch(() => {});
     } catch { alert("Speichern fehlgeschlagen."); }
@@ -235,7 +294,35 @@ export function WordsTab({ session }) {
       setPage((p) => (p ? { ...p, rows: p.rows.filter((w) => w.id !== word.id) } : p));
       setLegacyPersonal((prev) => (prev ? prev.filter((w) => w.id !== word.id) : prev));
       setCounts((c) => (c ? { ...c, p: Math.max(0, c.p - 1) } : c));
+      setPrivateTotal((n) => (n == null ? n : Math.max(0, n - 1)));
+      setSelectedWords((prev) => { const next = new Set(prev); next.delete(word.id); return next; });
     } catch { alert("Löschen fehlgeschlagen."); }
+  }
+
+  async function bulkDeleteSelected() {
+    const ids = Array.from(selectedWords);
+    const toDelete = visible.filter((w) => ids.includes(w.id) && w.source === "personal");
+    if (!toDelete.length) return;
+    if (!confirm(`${toDelete.length} Wörter wirklich löschen?`)) return;
+    for (const word of toDelete) await deleteWord(word);
+    clearSelection();
+  }
+
+  async function bulkMoveSelected(fid) {
+    const ids = Array.from(selectedWords);
+    const toMove = visible.filter((w) => ids.includes(w.id) && w.source === "personal");
+    if (!toMove.length) return;
+    const targetFid = fid || null;
+    for (const word of toMove) {
+      if (targetFid === (word.folderId || null)) continue;
+      try {
+        await dbSet(`users/${session.uid}/words/${word.id}`, { folderId: targetFid, updatedAt: serverTimestamp(), updatedBy: session.uid });
+        const localPatch = { folderId: targetFid, updatedAt: Date.now(), updatedBy: session.uid };
+        patchLocal(word.id, localPatch);
+        cacheUpdate(`users/${session.uid}/words`, word.id, localPatch);
+      } catch { alert("Verschieben fehlgeschlagen."); }
+    }
+    clearSelection();
   }
 
   function startEdit(w) {
@@ -277,13 +364,15 @@ export function WordsTab({ session }) {
   const legacyRows = (legacyPersonal || []).filter((w) => {
     const mf = filterFolder === "all" || w.folderId === filterFolder;
     const ms = !q || (w.de || "").toLowerCase().startsWith(q);
-    return mf && ms;
+    const msrc = sourceFilter === "all" || w.source === sourceFilter;
+    return mf && ms && msrc;
   });
-  // While the legacy personal sweep is active those words are not part of the paged query,
-  // so they ride along on every page rather than being windowed.
   const visible = [...windowRows(page, pageIdx, WORD_PAGE_SERVER), ...legacyRows]
+    .filter((w) => sourceFilter === "all" || w.source === sourceFilter)
     .map((w) => (w.source === "global" ? withTrans(w, session.lang) : w));
-  const total = counts && !q ? counts.g + counts.p : null;
+  const total = counts && !q
+    ? (sourceFilter === "personal" ? counts.p : sourceFilter === "global" ? counts.g : counts.g + counts.p)
+    : null;
   const pages = total != null ? pageCount(total, WORD_PAGE_SERVER) : null;
   const atLastPage = pages != null ? pageIdx >= pages - 1 : !canGoNext(page, pageIdx, WORD_PAGE_SERVER);
   const myFolders = folders.filter((f) => f.source === "personal");
@@ -292,6 +381,15 @@ export function WordsTab({ session }) {
   return (<>
     <div className="add-form">
       <h3>+ Eigenes Wort hinzufügen</h3>
+      {!canCreate && (
+        <div className="warn-box">
+          <span className="warn-box-icon">⚠️</span>
+          <span>
+            Du hast {PRIVATE_WORD_LIMIT} noch nicht gemeisterte eigene Wörter. Meistere zuerst einige davon,
+            um wieder neue anzulegen.
+          </span>
+        </div>
+      )}
       <div className="form-row">
         <input className="in-sm" placeholder="der/die/das" value={article} onChange={(e) => setArticle(e.target.value)} />
         <input placeholder="Deutsches Wort" value={de} maxLength={LIMIT.de} onChange={(e) => setDe(e.target.value)} />
@@ -311,7 +409,7 @@ export function WordsTab({ session }) {
       </div>
       <div className="form-row" style={{ alignItems: "flex-end" }}>
         <ImageUpload value={imageUrl} onChange={setImageUrl} small />
-        <button className="btn-add" onClick={addWord} disabled={!de.trim() || !ru.trim()} style={{ alignSelf: "flex-end" }}>+</button>
+        <button className="btn-add" onClick={addWord} disabled={!de.trim() || !ru.trim() || !canCreate} style={{ alignSelf: "flex-end" }}>+</button>
       </div>
     </div>
     <div className="filter-bar">
@@ -320,8 +418,32 @@ export function WordsTab({ session }) {
         <option value="all">Alle Ordner</option>
         {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
       </select>
+      <select value={sourceFilter} onChange={(e) => onSourceFilterChange(e.target.value)}>
+        <option value="all">Alle Wörter</option>
+        <option value="personal">Meine Wörter</option>
+        <option value="global">Kurswörter</option>
+      </select>
     </div>
-    <div className="sec-label">Wörter ({total != null ? total + legacyRows.length : visible.length})</div>
+    <div className="words-header-sticky">
+      <div className="words-header-main">
+        <label className="words-select-all">
+          <input type="checkbox" checked={visible.filter((w) => w.source === "personal").every((w) => selectedWords.has(w.id)) && visible.some((w) => w.source === "personal")} onChange={selectAllVisible} disabled={!visible.some((w) => w.source === "personal")} />
+          <span className="sec-label" style={{ margin: 0 }}>Wörter ({total != null ? total : visible.length})</span>
+        </label>
+      </div>
+      {selectedWords.size > 0 && (
+        <div className="bulk-actions-bar">
+          <span style={{ fontSize: 13, color: "var(--ink-soft)" }}>{selectedWords.size} ausgewählt</span>
+          <select value="" onChange={(e) => { if (e.target.value) bulkMoveSelected(e.target.value); }} style={{ flex: "none", maxWidth: 180 }}>
+            <option value="">📁 In Ordner verschieben</option>
+            {myFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+            <option value="">📂 Kein Ordner</option>
+          </select>
+          <button className="btn-sm danger" onClick={bulkDeleteSelected}>Löschen</button>
+          <button className="btn-sm" onClick={clearSelection}>Auswahl aufheben</button>
+        </div>
+      )}
+    </div>
     <div className="word-list">
       {visible.length === 0 && <div className="empty" style={{ padding: 24 }}><p>{busy ? "Lädt…" : "Keine Wörter gefunden."}</p></div>}
       {visible.map((w) => {
@@ -358,37 +480,37 @@ export function WordsTab({ session }) {
           );
         }
         return (
-          <div className="word-item" key={w.id} style={{ flexDirection: "column", alignItems: "stretch", gap: 9 }}>
-            {}
-            <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0, cursor: "pointer" }} onClick={() => setPreview(w.id)}>
+          <div className={`word-item word-item-card${selectedWords.has(w.id) ? " selected" : ""}`} key={w.id}>
+            <div className="word-card-main" style={{ cursor: "pointer" }} onClick={() => setPreview(w.id)}>
+              {isOwn && (
+                <label className="word-checkbox" onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={selectedWords.has(w.id)} onChange={() => toggleWordSelection(w.id)} />
+                </label>
+              )}
               {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
               <div className="wi-text">
                 <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{w.de}</div>
                 <div className="wi-ru">{w.ru}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
+                {(() => {
+                  const p = progress[w.id];
+                  const eff = effProgress(w, p) || {};
+                  if (!p) return <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4 }}>🌱 Noch nicht gelernt</div>;
+                  const level = eff.level || 0;
+                  return (
+                    <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <span title={`Stufe ${level} von 5`}>{lvlEmoji(level)} Stufe {level}</span>
+                      <span style={{ color: "var(--ivory-dark)" }}>·</span>
+                      <span>🔄 {nextReviewText(eff.due)}</span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
-            {}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", borderTop: "1px solid var(--ivory-dark)", paddingTop: 8 }}>
-              {(() => {
-                const p = progress[w.id];
-                const eff = effProgress(w, p) || {};
-                const base = { fontSize: 12, color: "var(--ink-soft)" };
-                if (!p) return <span style={base}>🌱 Noch nicht gelernt</span>;
-                const level = eff.level || 0;
-                return (
-                  <span style={{ ...base, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    <span title={`Stufe ${level} von 5`}>{lvlEmoji(level)} Stufe {level}</span>
-                    <span style={{ color: "var(--ivory-dark)" }}>·</span>
-                    <span>🔄 {nextReviewText(eff.due)}</span>
-                  </span>
-                );
-              })()}
-              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                {folder && <span className="wi-folder">{folder.icon} {folder.name}</span>}
-                <span className={`wi-badge ${w.source === "global" ? "badge-g" : "badge-p"}`}>{w.source === "global" ? "Kurs" : "Ich"}</span>
-                {isOwn && <button className="btn-sm" onClick={() => startEdit(w)} title="Bearbeiten">✏️</button>}
-                {isOwn && <button className="btn-del" onClick={() => deleteWord(w)}>✕</button>}
-              </div>
+            <div className="wi-tools">
+              {folder && <span className="wi-folder">{folder.icon} {folder.name}</span>}
+              <span className={`wi-badge ${w.source === "global" ? "badge-g" : "badge-p"}`}>{w.source === "global" ? "Kurs" : "Ich"}</span>
+              {isOwn && <button className="btn-sm" onClick={() => startEdit(w)} title="Bearbeiten">✏️</button>}
+              {isOwn && <button className="btn-del" onClick={() => deleteWord(w)}>✕</button>}
             </div>
           </div>
         );

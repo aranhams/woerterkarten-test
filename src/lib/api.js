@@ -99,6 +99,9 @@ export async function collocationSync(action, payload = {}) {
 export const getWeakCollocations = (classId) => collocationSync("weak-collocations", { classId });
 export const bulkActivateCollocations = (wordIds) => collocationSync("bulk-opt-in-ids", { wordIds });
 export const bulkDeactivateCollocations = (wordIds) => collocationSync("bulk-opt-out-ids", { wordIds });
+export const addCollocationVariant = (baseWordId, partnerLabel) => collocationSync("add-variant", { baseWordId, partnerLabel });
+export const removeCollocationVariant = (variantId) => collocationSync("remove-variant", { variantId });
+export const purgeCollocationSets = (wordId) => collocationSync("purge-sets", { wordId });
 
 export async function getCollocationPractice({ folderId = null } = {}) {
   const token = await idToken();

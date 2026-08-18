@@ -57,7 +57,7 @@ export function germanSection(wikitext) {
   return start === -1 ? null : lines.slice(start, end).join("\n");
 }
 
-function definitionBlock(section, template) {
+export function definitionBlock(section, template) {
   const re = new RegExp(`\\{\\{${template}\\}\\}[^\\n]*\\n((?::[^\\n]*(?:\\n|$))+)`);
   const m = section.match(re);
   return m ? m[1] : null;
@@ -82,6 +82,37 @@ export function extractIpaVariants(section) {
   return [...line.matchAll(/\{\{Lautschrift\|([^}|]*)\}\}/g)]
     .map((m) => m[1].trim())
     .filter((v) => v && v.length <= MAX_IPA_LEN && IPA_ALLOWED.test(v));
+}
+
+const MAX_COLLOC_PARTNER = 40;
+const DEFAULT_COLLOC_MAX = 24;
+const collNorm = (s) => nfc(s).toLowerCase();
+
+const COLLOC_STOPWORDS = new Set([
+  "der", "die", "das", "ein", "eine", "einen", "einem", "einer", "eines",
+  "und", "oder", "aber", "nicht", "kein", "keine", "sich", "es", "man",
+  "in", "an", "auf", "aus", "bei", "mit", "nach", "von", "vor", "zu", "zum", "zur",
+  "wieder", "sehr", "auch", "noch", "schon", "so", "wie", "als", "etwas", "jemand",
+]);
+
+export function extractCollocations(wikitext, { word = "", max = DEFAULT_COLLOC_MAX } = {}) {
+  const section = germanSection(wikitext);
+  if (!section) return [];
+  const block = definitionBlock(section, "Charakteristische Wortkombinationen");
+  if (!block) return [];
+  const skip = collNorm(word);
+  const seen = new Set();
+  const out = [];
+  for (const m of block.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
+    const partner = (m[1] || "").split("#")[0].trim();
+    const norm = collNorm(partner);
+    if (!partner || !norm || partner.length > MAX_COLLOC_PARTNER) continue;
+    if (norm === skip || seen.has(norm) || COLLOC_STOPWORDS.has(norm)) continue;
+    seen.add(norm);
+    out.push(partner);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 const stressIndexOf = (ipa) => syllabifyIpa(ipa).findIndex((n) => n.stressed);
@@ -116,12 +147,13 @@ async function fetchWithTimeout(url, options, ms) {
   }
 }
 
-async function lookupWiktionary(de, L) {
+export function isLookupable(de) {
+  return LOOKUPABLE.test(nfc(de));
+}
+
+export async function fetchWiktionaryWikitext(de) {
   const word = nfc(de);
-  if (!LOOKUPABLE.test(word)) {
-    L.log("info", "pron.wiktionary_skipped", { reason: "charset" });
-    return null;
-  }
+  if (!LOOKUPABLE.test(word)) return { status: "charset" };
   const url =
     "https://de.wiktionary.org/w/api.php?action=parse&prop=wikitext&format=json&formatversion=2&redirects=1&page=" +
     encodeURIComponent(word);
@@ -131,18 +163,31 @@ async function lookupWiktionary(de, L) {
     headers: { "User-Agent": `Woerterkarten/1.0 (+${contact})`, Accept: "application/json" },
   }, WIKTIONARY_TIMEOUT_MS);
 
-  if (!res.ok) {
-    L.log("info", "pron.wiktionary_miss", { status: res.status });
-    return null;
-  }
+  if (!res.ok) return { status: "http", httpStatus: res.status };
   const body = (await res.text()).slice(0, MAX_WIKITEXT_BYTES);
   let data;
-  try { data = JSON.parse(body); } catch { return null; }
+  try { data = JSON.parse(body); } catch { return { status: "no_wikitext" }; }
   const wikitext = data?.parse?.wikitext;
-  if (typeof wikitext !== "string") {
+  if (typeof wikitext !== "string") return { status: "no_wikitext" };
+  return { status: "ok", wikitext, revid: Number.isInteger(data?.parse?.revid) ? data.parse.revid : null };
+}
+
+async function lookupWiktionary(de, L) {
+  const word = nfc(de);
+  const fetched = await fetchWiktionaryWikitext(word);
+  if (fetched.status === "charset") {
+    L.log("info", "pron.wiktionary_skipped", { reason: "charset" });
+    return null;
+  }
+  if (fetched.status === "http") {
+    L.log("info", "pron.wiktionary_miss", { status: fetched.httpStatus });
+    return null;
+  }
+  if (fetched.status !== "ok") {
     L.log("info", "pron.wiktionary_miss", { reason: "no_wikitext" });
     return null;
   }
+  const { wikitext, revid } = fetched;
 
   const parsed = parseWiktionary(wikitext, word);
   if (!parsed) {
@@ -154,7 +199,7 @@ async function lookupWiktionary(de, L) {
     return null;
   }
   if (parsed.hyph && !parsed.bet) L.log("info", "pron.derive_abort", { word });
-  return { ...parsed, revid: Number.isInteger(data?.parse?.revid) ? data.parse.revid : null };
+  return { ...parsed, revid };
 }
 
 export function buildSsml(de, voice) {

@@ -1,22 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import { loadGlobalFolders } from "../../data/loaders";
-import { loadCollocationSet } from "../../data/collocations";
+import { loadCollocationSet, loadVariantSets } from "../../data/collocations";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { WORD_PAGE_SERVER } from "../../lib/constants";
 import { validImageUrl, cldImg } from "../../lib/format";
-import { collocationSync, bulkActivateCollocations, bulkDeactivateCollocations } from "../../lib/api";
+import { collocationSync, bulkActivateCollocations, bulkDeactivateCollocations, addCollocationVariant, removeCollocationVariant } from "../../lib/api";
 
 const SEARCH_DEBOUNCE = 350;
 const MIN_QUERY = 2;
 
 const MAX_OPTIONS = 20;
+const MAX_VARIANTS = 3;
 const SERVED_WRONG = 3;
-// Mirrors WORD_CATEGORIES / PARTNER_LABELS in api/_collocations.js (validated server-side).
 const WORD_CATEGORIES = ["Nomen", "Verb", "Reflexivverb", "Trennbares Verb", "Adjektiv", "Adverb", "Sonstige"];
 const PARTNER_LABELS = ["Nomen", "Verb", "Adjektiv", "Adverb"];
 const countCorrect = (opts) => (opts || []).filter((o) => o.correct).length;
 const countWrong = (opts) => (opts || []).filter((o) => !o.correct).length;
-// Ready = we can always serve 3 wrong + 1 correct: at least one correct and at least three wrong.
 const isReady = (set) => set?.optedIn === true && countCorrect(set.options) >= 1 && countWrong(set.options) >= SERVED_WRONG;
 
 const normDe = (s) => String(s ?? "").normalize("NFC").replace(/\s+/g, " ").trim().toLowerCase();
@@ -35,9 +34,6 @@ function SmartBatchButton({ selectedIds, sets, filteredWords, rowBusy, onActivat
   return <button className="btn-add" onClick={onActivate} disabled={rowBusy}>Aktivieren</button>;
 }
 
-// The set snapshots the word's German (de/deRev) at generation. If the teacher later edits
-// the word, the stored options may no longer fit — surface a hint rather than silently
-// serving stale collocations. deRev is the primary signal; de covers pre-snapshot sets.
 function hasDrifted(word, set) {
   if (!word || !set || set.optedIn !== true || (set.options || []).length === 0) return false;
   if ((word.deRev || 0) !== (set.deRev || 0)) return true;
@@ -64,6 +60,7 @@ export function CollocationsTeacherTab({ session }) {
   const [msg, setMsg] = useState(null);
   const [edit, setEdit] = useState(null);
   const [manual, setManual] = useState(null);
+  const [variantAdd, setVariantAdd] = useState(null);
 
   const folderScope = (fid) => (!fid || fid === "all" ? null : fid);
 
@@ -134,11 +131,55 @@ export function CollocationsTeacherTab({ session }) {
     return () => { cancelled = true; };
   }, [pagedWords.map((w) => w.id).join(",")]);
 
-  function flash(text) {
-    setMsg(text);
-    setTimeout(() => setMsg((m) => (m === text ? null : m)), 2800);
+  useEffect(() => {
+    const id = expandedId;
+    if (!id) return;
+    const set = sets[id];
+    if (!set || set.variantSets !== undefined) return;
+    if (!set.variants?.length) { putSet(id, { ...set, variantSets: [] }); return; }
+    let cancelled = false;
+    (async () => {
+      const variantSets = await loadVariantSets(set.variants);
+      if (cancelled) return;
+      setSets((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], variantSets } } : prev));
+    })();
+    return () => { cancelled = true; };
+  }, [expandedId, sets[expandedId]?.variants]);
+
+  function flash(text, scope = "global") {
+    const entry = { text, scope };
+    setMsg(entry);
+    setTimeout(() => setMsg((m) => (m === entry ? null : m)), 2800);
   }
-  const putSet = (wordId, set) => setSets((s) => ({ ...s, [wordId]: set }));
+
+  function msgBanner(text, extraStyle = {}) {
+    const isErr = text.startsWith("⚠");
+    return (
+      <div style={{
+        padding: "8px 12px", borderRadius: 8, fontSize: 13, fontWeight: 500, marginBottom: 12, textAlign: "center",
+        background: isErr ? "var(--red-pale)" : "var(--sage-pale)",
+        color: isErr ? "var(--red-soft)" : "var(--sage)",
+        ...extraStyle,
+      }}>{text}</div>
+    );
+  }
+  const putSet = (wordId, set) =>
+    setSets((s) => ({ ...s, [wordId]: set ? { ...set, variantSets: s[wordId]?.variantSets ?? set.variantSets } : set }));
+
+  function putVariant(baseWordId, variantSet) {
+    setSets((s) => {
+      const base = s[baseWordId];
+      if (!base) return s;
+      const variantSets = (base.variantSets || []).map((v) => (v.wordId === variantSet.wordId ? variantSet : v));
+      return { ...s, [baseWordId]: { ...base, variantSets } };
+    });
+  }
+
+  function applyResult(setId, baseWordId, set) {
+    if (!set) return;
+    if (setId === baseWordId) putSet(baseWordId, set);
+    else putVariant(baseWordId, set);
+  }
 
   async function onFolderChange(v) {
     setFilterFolder(v);
@@ -163,58 +204,103 @@ export function CollocationsTeacherTab({ session }) {
     setExpandedId((cur) => (cur === id ? null : id));
     setEdit(null);
     setManual(null);
+    setVariantAdd(null);
   }
 
-  async function act(action, payload, okMsg) {
+  async function act(action, payload, okMsg, scope = "global") {
     if (rowBusy) return null;
     setRowBusy(true);
     try {
       const r = await collocationSync(action, payload);
-      if (okMsg) flash(okMsg);
+      if (okMsg) flash(okMsg, scope);
       return r;
     } catch (e) {
-      flash("⚠ " + (e.message || "Fehler"));
+      flash("⚠ " + (e.message || "Fehler"), scope);
       return null;
     } finally {
       setRowBusy(false);
     }
   }
 
+  const baseIdOf = (set) => (set.variant ? set.baseWordId : set.wordId);
+
   async function optIn(w) {
-    const r = await act("opt-in", { wordId: w.id }, "✓ Aktiviert");
+    const r = await act("opt-in", { wordId: w.id }, "✓ Aktiviert", w.id);
     if (r) putSet(w.id, r.set);
   }
   async function optOut(w) {
-    const r = await act("opt-out", { wordId: w.id }, "Deaktiviert");
+    const r = await act("opt-out", { wordId: w.id }, "Deaktiviert", w.id);
     if (r) putSet(w.id, r.set);
   }
   async function generate(w) {
-    const r = await act("generate", { wordId: w.id }, "✓ KI-Optionen ergänzt");
+    const r = await act("generate", { wordId: w.id }, "✓ KI-Optionen ergänzt", w.id);
     if (r) putSet(w.id, r.set);
   }
-  async function resync(w) {
-    const r = await act("resync", { wordId: w.id }, "✓ Als aktuell markiert");
-    if (r) putSet(w.id, r.set);
+  async function resync(set) {
+    const r = await act("resync", { wordId: set.wordId }, "✓ Als aktuell markiert", baseIdOf(set));
+    if (r) applyResult(set.wordId, baseIdOf(set), r.set);
   }
-  async function toggleCorrect(w, optionId) {
-    const r = await act("toggle-correct", { wordId: w.id, optionId });
-    if (r) putSet(w.id, r.set);
+  async function toggleCorrect(set, optionId) {
+    const r = await act("toggle-correct", { wordId: set.wordId, optionId }, null, baseIdOf(set));
+    if (r) applyResult(set.wordId, baseIdOf(set), r.set);
   }
-  async function removeOption(w, optionId) {
-    const r = await act("remove-option", { wordId: w.id, optionId }, "Entfernt");
-    if (r) putSet(w.id, r.set);
+  async function removeOption(set, optionId) {
+    const r = await act("remove-option", { wordId: set.wordId, optionId }, "Entfernt", baseIdOf(set));
+    if (r) applyResult(set.wordId, baseIdOf(set), r.set);
   }
-  async function saveEdit(w) {
-    const r = await act("edit-option", { wordId: w.id, optionId: edit.optionId, text: edit.text }, "✓ Gespeichert");
-    if (r) { putSet(w.id, r.set); setEdit(null); }
+  async function saveEdit(set) {
+    const r = await act("edit-option", { wordId: set.wordId, optionId: edit.optionId, text: edit.text, kasus: edit.kasus }, "✓ Gespeichert", baseIdOf(set));
+    if (r) { applyResult(set.wordId, baseIdOf(set), r.set); setEdit(null); }
   }
-  async function saveManual(w) {
-    const r = await act("add-option", { wordId: w.id, text: manual.text, correct: manual.correct }, "✓ Hinzugefügt");
-    if (r) { putSet(w.id, r.set); setManual(null); }
+  async function setKasus(set, optionId, kasus) {
+    const o = (set.options || []).find((x) => x.id === optionId);
+    const r = await act("edit-option", { wordId: set.wordId, optionId, text: o?.text ?? "", kasus }, "✓ Fall gespeichert", baseIdOf(set));
+    if (r) applyResult(set.wordId, baseIdOf(set), r.set);
   }
-  async function saveCategory(w, cat, partnerLabel) {
-    const r = await act("set-category", { wordId: w.id, cat, partnerLabel }, "✓ Wortart gespeichert");
-    if (r) putSet(w.id, r.set);
+  async function saveManual(set) {
+    const r = await act("add-option", { wordId: set.wordId, text: manual.text, correct: manual.correct, kasus: manual.kasus }, "✓ Hinzugefügt", baseIdOf(set));
+    if (r) { applyResult(set.wordId, baseIdOf(set), r.set); setManual(null); }
+  }
+  async function saveCategory(set, cat, partnerLabel) {
+    const r = await act("set-category", { wordId: set.wordId, cat, partnerLabel }, "✓ Wortart gespeichert", baseIdOf(set));
+    if (r) applyResult(set.wordId, baseIdOf(set), r.set);
+  }
+  async function addVariant(w, partnerLabel) {
+    if (rowBusy) return;
+    setRowBusy(true);
+    try {
+      const r = await addCollocationVariant(w.id, partnerLabel);
+      setSets((s) => {
+        const base = s[w.id];
+        if (!base) return s;
+        const variantSets = [...(base.variantSets || []), r.variant];
+        return { ...s, [w.id]: { ...base, ...r.base, variantSets } };
+      });
+      flash("✓ Duplikat angelegt", w.id);
+    } catch (e) {
+      flash("⚠ " + (e.message || "Fehler"), w.id);
+    } finally {
+      setRowBusy(false);
+    }
+  }
+  async function removeVariant(baseWordId, variantId) {
+    if (rowBusy) return;
+    if (!confirm("Duplikat wirklich entfernen?")) return;
+    setRowBusy(true);
+    try {
+      const r = await removeCollocationVariant(variantId);
+      setSets((s) => {
+        const base = s[baseWordId];
+        if (!base) return s;
+        const variantSets = (base.variantSets || []).filter((v) => v.wordId !== variantId);
+        return { ...s, [baseWordId]: { ...base, ...(r.base || {}), variantSets } };
+      });
+      flash("Duplikat entfernt", baseWordId);
+    } catch (e) {
+      flash("⚠ " + (e.message || "Fehler"), baseWordId);
+    } finally {
+      setRowBusy(false);
+    }
   }
 
   function enterSelectionMode() {
@@ -285,6 +371,231 @@ export function CollocationsTeacherTab({ session }) {
     }
   }
 
+  function renderSetBody(set, w, allowAI) {
+    const options = set.options || [];
+    const nCorrect = countCorrect(options);
+    const nWrong = countWrong(options);
+    const drifted = hasDrifted(w, set);
+    const editing = edit && edit.setId === set.wordId;
+    const manualOpen = manual && manual.setId === set.wordId;
+
+    return (<>
+      {drifted && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", borderRadius: 8, background: "var(--red-pale)", border: "1px solid var(--red-soft)", marginBottom: 12 }}>
+          <span style={{ fontSize: 13, color: "var(--red-soft)", fontWeight: 600, flex: "1 1 200px" }}>
+            ⚠ Das Wort wurde geändert{set.de && normDe(set.de) !== normDe(w.de) ? ` (früher „${set.de}")` : ""}. Die Optionen passen evtl. nicht mehr.
+          </span>
+          {allowAI && <button className="btn-sm" onClick={() => generate(w)} disabled={rowBusy || options.length >= MAX_OPTIONS} title="Neue passende Optionen ergänzen">🤖 Neu generieren</button>}
+          <button className="btn-sm" onClick={() => resync(set)} disabled={rowBusy} title="Optionen sind noch passend – Hinweis ausblenden">✓ Passt noch</button>
+        </div>
+      )}
+
+      <p style={{ fontSize: 13, color: "var(--ink-soft)", margin: "0 0 10px" }}>
+        Markiere die <strong>richtigen</strong> Kollokationen (✓) — mindestens eine richtige und {SERVED_WRONG} falsche.
+        Schüler sehen pro Frage {SERVED_WRONG + 1} zufällige Optionen (1 richtig, {SERVED_WRONG} falsch).
+      </p>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12, padding: "8px 12px", background: "var(--ivory)", border: "1px solid var(--ivory-dark)", borderRadius: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "var(--ink-soft)" }}>
+          Wortart
+          <select value={set.cat || ""} disabled={rowBusy} aria-label="Wortart des Wortes"
+            onChange={(e) => saveCategory(set, e.target.value, set.partnerLabel || "")}
+            style={{ padding: "5px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "white", color: "var(--ink)", fontFamily: "inherit", outline: "none" }}>
+            <option value="">— wählen</option>
+            {WORD_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "var(--ink-soft)" }}>
+          Optionen sind
+          <select value={set.partnerLabel || ""} disabled={rowBusy} aria-label="Wortart der Optionen"
+            onChange={(e) => saveCategory(set, set.cat || "", e.target.value)}
+            style={{ padding: "5px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "white", color: "var(--ink)", fontFamily: "inherit", outline: "none" }}>
+            <option value="">— wählen</option>
+            {PARTNER_LABELS.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
+        {!set.partnerLabel && (
+          <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>Schüler sehen sonst keinen Hinweis zur Wortart</span>
+        )}
+      </div>
+
+      {options.length === 0 ? (
+        <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+          {allowAI ? "Noch keine Optionen. Per KI vorschlagen lassen oder manuell hinzufügen." : "Noch keine Optionen. Manuell hinzufügen."}
+        </p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+          {options.map((o) => {
+            const isEditing = editing && edit.optionId === o.id;
+            return (
+              <div key={o.id} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
+                border: `1px solid ${o.correct ? "var(--sage)" : "var(--ivory-dark)"}`,
+                background: o.correct ? "var(--sage-pale)" : "white", borderRadius: 8,
+              }}>
+                <button onClick={() => toggleCorrect(set, o.id)} disabled={rowBusy}
+                  title={o.correct ? "Nicht mehr als richtig markieren" : "Als richtig markieren"}
+                  aria-label="Als richtig markieren" aria-pressed={o.correct} style={{
+                    width: 22, height: 22, flexShrink: 0, borderRadius: 6, cursor: "pointer",
+                    border: `2px solid ${o.correct ? "var(--sage)" : "var(--ivory-dark)"}`,
+                    background: o.correct ? "var(--sage)" : "white", color: "white",
+                    display: "flex", alignItems: "center", justifyContent: "center", padding: 0, fontSize: 13, fontWeight: 700,
+                  }}>
+                  {o.correct && "✓"}
+                </button>
+                {isEditing ? (
+                  <>
+                    <input autoFocus value={edit.text} onChange={(e) => setEdit({ ...edit, text: e.target.value })}
+                      onKeyDown={(e) => { if (e.key === "Enter") saveEdit(set); if (e.key === "Escape") setEdit(null); }}
+                      style={{ flex: 1, minWidth: 0, padding: "6px 9px", border: "1.5px solid var(--sage)", borderRadius: 7, fontSize: 14, outline: "none", fontFamily: "inherit" }} />
+                    <button className="btn-sm" onClick={() => saveEdit(set)} disabled={rowBusy || !edit.text.trim()}>Speichern</button>
+                    <button className="btn-sm" onClick={() => setEdit(null)} disabled={rowBusy}>Abbrechen</button>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ flex: 1, fontSize: 15, fontWeight: o.correct ? 600 : 400 }}>{o.text}</span>
+                    {o.correct && set?.partnerLabel === "Verb" && (
+                      <select value={o.kasus || "none"} disabled={rowBusy}
+                        onChange={(e) => setKasus(set, o.id, e.target.value)}
+                        title="Fall, den das Verb dem Nomen gibt (für die Beispielkarte)"
+                        aria-label="Fall des Nomens"
+                        style={{ fontSize: 12, padding: "3px 6px", borderRadius: 6, border: "1px solid var(--ivory-dark)", background: "white", color: "var(--ink)", fontFamily: "inherit" }}>
+                        <option value="akk">Akkusativ</option>
+                        <option value="dat">Dativ</option>
+                        <option value="nom">Nominativ</option>
+                        <option value="none">— kein Fall</option>
+                      </select>
+                    )}
+                    <span className="pron-badge" style={{ background: "transparent", color: "var(--ink-soft)" }}>
+                      {o.source === "ai" ? "KI" : "Lehrer"} · {o.correct ? "richtig" : "falsch"}
+                    </span>
+                    <button className="btn-sm" onClick={() => setEdit({ setId: set.wordId, optionId: o.id, text: o.text, kasus: o.kasus })} disabled={rowBusy} title="Bearbeiten">✎</button>
+                    <button className="btn-del" onClick={() => removeOption(set, o.id)} disabled={rowBusy} title="Entfernen">✕</button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {allowAI ? (
+          <button className="btn-add" onClick={() => generate(w)} disabled={rowBusy || options.length >= MAX_OPTIONS}
+            title={options.length >= MAX_OPTIONS ? `Höchstens ${MAX_OPTIONS} Optionen` : "Optionen per KI ergänzen"}>
+            {rowBusy ? "⏳…" : `🤖 KI: ${Math.max(0, 4 - options.length) > 0 ? `auffüllen (${Math.max(0, 4 - options.length)})` : "+1 Option"}`}
+          </button>
+        ) : (
+          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Optionen für Duplikate werden von der Lehrkraft eingegeben.</span>
+        )}
+        <button className="btn-sm" onClick={() => setManual(manualOpen ? null : { setId: set.wordId, text: "", correct: nCorrect === 0, kasus: "akk" })} disabled={rowBusy || options.length >= MAX_OPTIONS}>
+          ＋ Option manuell
+        </button>
+        {allowAI && <button className="btn-sm danger" onClick={() => optOut(w)} disabled={rowBusy} style={{ marginLeft: "auto" }}>Deaktivieren</button>}
+      </div>
+
+      {manualOpen && (
+        <div style={{ marginTop: 12, padding: "12px 14px", background: "var(--ivory)", border: "1px solid var(--ivory-dark)", borderRadius: 10 }}>
+          <input placeholder="Option, z. B. beenden" value={manual.text} autoFocus
+            onChange={(e) => setManual({ ...manual, text: e.target.value })}
+            onKeyDown={(e) => { if (e.key === "Enter" && manual.text.trim()) saveManual(set); if (e.key === "Escape") setManual(null); }}
+            style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 14, background: "white", color: "var(--ink)", outline: "none", fontFamily: "inherit", marginBottom: 10 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div role="group" aria-label="Antworttyp"
+              style={{ display: "inline-flex", gap: 2, background: "var(--ivory-dark)", borderRadius: 99, padding: 3 }}>
+              <button type="button" onClick={() => setManual({ ...manual, correct: true })} aria-pressed={manual.correct}
+                style={{
+                  padding: "6px 14px", borderRadius: 99, border: "none", cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", transition: "all .15s",
+                  background: manual.correct ? "var(--sage)" : "transparent",
+                  color: manual.correct ? "white" : "var(--ink-soft)",
+                }}>
+                ✓ richtig
+              </button>
+              <button type="button" onClick={() => setManual({ ...manual, correct: false })} aria-pressed={!manual.correct}
+                style={{
+                  padding: "6px 14px", borderRadius: 99, border: "none", cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", transition: "all .15s",
+                  background: !manual.correct ? "white" : "transparent",
+                  color: "var(--ink-soft)",
+                  boxShadow: !manual.correct ? "0 1px 3px rgba(0,0,0,.12)" : "none",
+                }}>
+                falsch
+              </button>
+            </div>
+            {manual.correct && set?.partnerLabel === "Verb" && (
+              <select value={manual.kasus || "akk"} onChange={(e) => setManual({ ...manual, kasus: e.target.value })}
+                title="Fall, den das Verb dem Nomen gibt (für die Beispielkarte)" aria-label="Fall des Nomens"
+                style={{ fontSize: 12, padding: "5px 8px", borderRadius: 7, border: "1px solid var(--ivory-dark)", background: "white", color: "var(--ink)", fontFamily: "inherit" }}>
+                <option value="akk">Akkusativ</option>
+                <option value="dat">Dativ</option>
+                <option value="nom">Nominativ</option>
+                <option value="none">— kein Fall</option>
+              </select>
+            )}
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <button className="btn-add" onClick={() => saveManual(set)} disabled={rowBusy || !manual.text.trim()} style={{ padding: "7px 16px" }}>Speichern</button>
+              <button className="btn-sm" onClick={() => setManual(null)} disabled={rowBusy}>Abbrechen</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>);
+  }
+
+  function renderVariants(set, w) {
+    const loading = set.variantSets === undefined;
+    const variantSets = set.variantSets || [];
+    const nVariants = loading ? (set.variants?.length || 0) : variantSets.length;
+    const atCap = nVariants >= MAX_VARIANTS;
+    const addOpen = variantAdd === w.id;
+    return (
+      <div style={{ marginTop: 16, borderTop: "1px dashed var(--ivory-dark)", paddingTop: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: nVariants ? 10 : 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>🔁 Duplikate</span>
+          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>({nVariants}/{MAX_VARIANTS})</span>
+          <span style={{ fontSize: 11, color: "var(--ink-soft)", flex: "1 1 100%" }}>
+            Gleiches Wort, andere Wortart der Optionen (z. B. Nomen→Adjektiv). Optionen werden manuell eingegeben.
+          </span>
+        </div>
+
+        {loading && nVariants > 0 && (
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", margin: "0 0 10px" }}>Lädt Duplikate…</p>
+        )}
+
+        {variantSets.map((v) => (
+          <div key={v.wordId} style={{ border: "1px solid var(--ivory-dark)", borderRadius: 10, padding: 12, marginBottom: 10, background: "var(--ivory)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <span className="pron-badge" style={{ background: "var(--sage-pale)", color: "var(--sage)" }}>
+                🔁 Duplikat{v.partnerLabel ? ` · ${v.partnerLabel}` : ""}
+              </span>
+              <span className="dsc-tag" style={{ marginTop: 0, ...(isReady(v) ? {} : { color: "var(--red-soft)", background: "var(--red-pale)" }) }}>
+                {isReady(v) ? "übungsbereit" : countCorrect(v.options) === 0 ? "keine richtige Antwort" : `noch ${SERVED_WRONG - countWrong(v.options)} falsche nötig`}
+              </span>
+              <button className="btn-del" onClick={() => removeVariant(w.id, v.wordId)} disabled={rowBusy} title="Duplikat entfernen" style={{ marginLeft: "auto" }}>✕ Duplikat</button>
+            </div>
+            {renderSetBody(v, w, false)}
+          </div>
+        ))}
+
+        {addOpen ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 12px", background: "var(--ivory)", border: "1px solid var(--ivory-dark)", borderRadius: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-soft)" }}>Wortart der Optionen:</span>
+            {PARTNER_LABELS.map((pl) => (
+              <button key={pl} className="btn-sm" onClick={() => { setVariantAdd(null); addVariant(w, pl); }} disabled={rowBusy}>{pl}</button>
+            ))}
+            <button className="btn-sm" onClick={() => setVariantAdd(null)} disabled={rowBusy} style={{ marginLeft: "auto" }}>Abbrechen</button>
+          </div>
+        ) : (
+          <button className="btn-sm" onClick={() => setVariantAdd(w.id)} disabled={rowBusy || atCap || loading}
+            title={atCap ? `Höchstens ${MAX_VARIANTS} Duplikate` : loading ? "Lädt…" : "Wort duplizieren, um eine andere Wortart zu üben"}>
+            ＋ Duplikat anlegen
+          </button>
+        )}
+      </div>
+    );
+  }
+
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
   const pages = total != null ? pageCount(total, WORD_PAGE_SERVER) : null;
@@ -335,13 +646,7 @@ export function CollocationsTeacherTab({ session }) {
       </div>
     )}
 
-    {msg && (
-      <div style={{
-        padding: "8px 12px", borderRadius: 8, fontSize: 13, fontWeight: 500, marginBottom: 12, textAlign: "center",
-        background: msg.startsWith("⚠") ? "var(--red-pale)" : "var(--sage-pale)",
-        color: msg.startsWith("⚠") ? "var(--red-soft)" : "var(--sage)",
-      }}>{msg}</div>
-    )}
+    {msg && msg.scope === "global" && msgBanner(msg.text)}
 
     <div className="word-list">
       {filteredWords.length === 0 && (
@@ -355,11 +660,10 @@ export function CollocationsTeacherTab({ session }) {
         const set = sets[w.id];
         const isExpanded = expandedId === w.id;
         const optedIn = set?.optedIn === true;
-        const options = set?.options || [];
-        const nCorrect = countCorrect(options);
-        const nWrong = countWrong(options);
+        const nCorrect = countCorrect(set?.options || []);
+        const nWrong = countWrong(set?.options || []);
         const ready = isReady(set);
-        const drifted = hasDrifted(w, set);
+        const nVariants = set?.variantSets?.length ?? set?.variants?.length ?? 0;
         const wordCat = set?.cat || (w.article && ["der", "die", "das"].includes(w.article.trim().toLowerCase()) ? "Nomen" : null);
 
         return (
@@ -388,6 +692,12 @@ export function CollocationsTeacherTab({ session }) {
                 <div className="wi-de">
                   {w.article && <span className="wi-article">{w.article}</span>}{w.de}
                   {wordCat && <span className="pron-badge" style={{ marginLeft: 8 }}>{wordCat}</span>}
+                  {nVariants > 0 && (
+                    <span className="pron-badge" style={{ marginLeft: 8, background: "var(--sage-pale)", color: "var(--sage)" }}
+                      title={`${nVariants} ${nVariants === 1 ? "Duplikat" : "Duplikate"}`}>
+                      🔁 {nVariants}
+                    </span>
+                  )}
                 </div>
                 <div className="wi-ru" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   {folder && <span>{folder.icon} {folder.name}</span>}
@@ -407,16 +717,7 @@ export function CollocationsTeacherTab({ session }) {
 
             {isExpanded && (
               <div style={{ borderTop: "1px solid var(--ivory-dark)", paddingTop: 12 }}>
-                {drifted && (
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", borderRadius: 8, background: "var(--red-pale)", border: "1px solid var(--red-soft)", marginBottom: 12 }}>
-                    <span style={{ fontSize: 13, color: "var(--red-soft)", fontWeight: 600, flex: "1 1 200px" }}>
-                      ⚠ Das Wort wurde geändert{set.de && normDe(set.de) !== normDe(w.de) ? ` (früher „${set.de}")` : ""}. Die Optionen passen evtl. nicht mehr.
-                    </span>
-                    <button className="btn-sm" onClick={() => generate(w)} disabled={rowBusy || options.length >= MAX_OPTIONS} title="Neue passende Optionen ergänzen">🤖 Neu generieren</button>
-                    <button className="btn-sm" onClick={() => resync(w)} disabled={rowBusy} title="Optionen sind noch passend – Hinweis ausblenden">✓ Passt noch</button>
-                  </div>
-                )}
-
+                {msg && msg.scope === w.id && msgBanner(msg.text)}
                 {set === undefined ? (
                   <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Lädt…</p>
                 ) : !optedIn ? (
@@ -425,130 +726,8 @@ export function CollocationsTeacherTab({ session }) {
                     <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Danach Optionen per KI vorschlagen lassen oder selbst eingeben.</span>
                   </div>
                 ) : (<>
-                  <p style={{ fontSize: 13, color: "var(--ink-soft)", margin: "0 0 10px" }}>
-                    Markiere die <strong>richtigen</strong> Kollokationen (✓) — mindestens eine richtige und {SERVED_WRONG} falsche.
-                    Schüler sehen pro Frage {SERVED_WRONG + 1} zufällige Optionen (1 richtig, {SERVED_WRONG} falsch).
-                  </p>
-
-                  {/* Manual counterpart to AI categorization: without this, cat/partnerLabel can
-                      only be set by "generate" — teachers building options by hand need a way. */}
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12, padding: "8px 12px", background: "var(--ivory)", border: "1px solid var(--ivory-dark)", borderRadius: 8 }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "var(--ink-soft)" }}>
-                      Wortart
-                      <select value={set.cat || ""} disabled={rowBusy} aria-label="Wortart des Wortes"
-                        onChange={(e) => saveCategory(w, e.target.value, set.partnerLabel || "")}
-                        style={{ padding: "5px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "white", color: "var(--ink)", fontFamily: "inherit", outline: "none" }}>
-                        <option value="">— wählen</option>
-                        {WORD_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </label>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "var(--ink-soft)" }}>
-                      Optionen sind
-                      <select value={set.partnerLabel || ""} disabled={rowBusy} aria-label="Wortart der Optionen"
-                        onChange={(e) => saveCategory(w, set.cat || "", e.target.value)}
-                        style={{ padding: "5px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "white", color: "var(--ink)", fontFamily: "inherit", outline: "none" }}>
-                        <option value="">— wählen</option>
-                        {PARTNER_LABELS.map((c) => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </label>
-                    {!set.partnerLabel && (
-                      <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>Schüler sehen sonst keinen Hinweis zur Wortart</span>
-                    )}
-                  </div>
-
-                  {options.length === 0 ? (
-                    <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Noch keine Optionen. Per KI vorschlagen lassen oder manuell hinzufügen.</p>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-                      {options.map((o) => {
-                        const isEditing = edit && edit.optionId === o.id;
-                        return (
-                          <div key={o.id} style={{
-                            display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
-                            border: `1px solid ${o.correct ? "var(--sage)" : "var(--ivory-dark)"}`,
-                            background: o.correct ? "var(--sage-pale)" : "white", borderRadius: 8,
-                          }}>
-                            <button onClick={() => toggleCorrect(w, o.id)} disabled={rowBusy}
-                              title={o.correct ? "Nicht mehr als richtig markieren" : "Als richtig markieren"}
-                              aria-label="Als richtig markieren" aria-pressed={o.correct} style={{
-                                width: 22, height: 22, flexShrink: 0, borderRadius: 6, cursor: "pointer",
-                                border: `2px solid ${o.correct ? "var(--sage)" : "var(--ivory-dark)"}`,
-                                background: o.correct ? "var(--sage)" : "white", color: "white",
-                                display: "flex", alignItems: "center", justifyContent: "center", padding: 0, fontSize: 13, fontWeight: 700,
-                              }}>
-                              {o.correct && "✓"}
-                            </button>
-                            {isEditing ? (
-                              <>
-                                <input autoFocus value={edit.text} onChange={(e) => setEdit({ ...edit, text: e.target.value })}
-                                  onKeyDown={(e) => { if (e.key === "Enter") saveEdit(w); if (e.key === "Escape") setEdit(null); }}
-                                  style={{ flex: 1, minWidth: 0, padding: "6px 9px", border: "1.5px solid var(--sage)", borderRadius: 7, fontSize: 14, outline: "none", fontFamily: "inherit" }} />
-                                <button className="btn-sm" onClick={() => saveEdit(w)} disabled={rowBusy || !edit.text.trim()}>Speichern</button>
-                                <button className="btn-sm" onClick={() => setEdit(null)} disabled={rowBusy}>Abbrechen</button>
-                              </>
-                            ) : (
-                              <>
-                                <span style={{ flex: 1, fontSize: 15, fontWeight: o.correct ? 600 : 400 }}>{o.text}</span>
-                                <span className="pron-badge" style={{ background: "transparent", color: "var(--ink-soft)" }}>
-                                  {o.source === "ai" ? "KI" : "Lehrer"} · {o.correct ? "richtig" : "falsch"}
-                                </span>
-                                <button className="btn-sm" onClick={() => setEdit({ optionId: o.id, text: o.text })} disabled={rowBusy} title="Bearbeiten">✎</button>
-                                <button className="btn-del" onClick={() => removeOption(w, o.id)} disabled={rowBusy} title="Entfernen">✕</button>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <button className="btn-add" onClick={() => generate(w)} disabled={rowBusy || options.length >= MAX_OPTIONS}
-                      title={options.length >= MAX_OPTIONS ? `Höchstens ${MAX_OPTIONS} Optionen` : "Optionen per KI ergänzen"}>
-                      {rowBusy ? "⏳…" : `🤖 KI: ${Math.max(0, 4 - options.length) > 0 ? `auffüllen (${Math.max(0, 4 - options.length)})` : "+1 Option"}`}
-                    </button>
-                    <button className="btn-sm" onClick={() => setManual(manual ? null : { text: "", correct: nCorrect === 0 })} disabled={rowBusy || options.length >= MAX_OPTIONS}>
-                      ＋ Option manuell
-                    </button>
-                    <button className="btn-sm danger" onClick={() => optOut(w)} disabled={rowBusy} style={{ marginLeft: "auto" }}>Deaktivieren</button>
-                  </div>
-
-                  {manual && (
-                    <div style={{ marginTop: 12, padding: "12px 14px", background: "var(--ivory)", border: "1px solid var(--ivory-dark)", borderRadius: 10 }}>
-                      <input placeholder="Option, z. B. beenden" value={manual.text} autoFocus
-                        onChange={(e) => setManual({ ...manual, text: e.target.value })}
-                        onKeyDown={(e) => { if (e.key === "Enter" && manual.text.trim()) saveManual(w); if (e.key === "Escape") setManual(null); }}
-                        style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 14, background: "white", color: "var(--ink)", outline: "none", fontFamily: "inherit", marginBottom: 10 }} />
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <div role="group" aria-label="Antworttyp"
-                          style={{ display: "inline-flex", gap: 2, background: "var(--ivory-dark)", borderRadius: 99, padding: 3 }}>
-                          <button type="button" onClick={() => setManual({ ...manual, correct: true })} aria-pressed={manual.correct}
-                            style={{
-                              padding: "6px 14px", borderRadius: 99, border: "none", cursor: "pointer", fontFamily: "inherit",
-                              fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", transition: "all .15s",
-                              background: manual.correct ? "var(--sage)" : "transparent",
-                              color: manual.correct ? "white" : "var(--ink-soft)",
-                            }}>
-                            ✓ richtig
-                          </button>
-                          <button type="button" onClick={() => setManual({ ...manual, correct: false })} aria-pressed={!manual.correct}
-                            style={{
-                              padding: "6px 14px", borderRadius: 99, border: "none", cursor: "pointer", fontFamily: "inherit",
-                              fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", transition: "all .15s",
-                              background: !manual.correct ? "white" : "transparent",
-                              color: "var(--ink-soft)",
-                              boxShadow: !manual.correct ? "0 1px 3px rgba(0,0,0,.12)" : "none",
-                            }}>
-                            falsch
-                          </button>
-                        </div>
-                        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                          <button className="btn-add" onClick={() => saveManual(w)} disabled={rowBusy || !manual.text.trim()} style={{ padding: "7px 16px" }}>Speichern</button>
-                          <button className="btn-sm" onClick={() => setManual(null)} disabled={rowBusy}>Abbrechen</button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  {renderSetBody(set, w, true)}
+                  {renderVariants(set, w)}
                 </>)}
               </div>
             )}

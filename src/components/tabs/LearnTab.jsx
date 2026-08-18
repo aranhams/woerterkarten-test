@@ -47,8 +47,6 @@ export function LearnTab({ session }) {
       setFolders(list);
       setProgress(prog);
       if (session.isTeacher) {
-        // Open on the first folder so the preview shows cards straight away; picking a
-        // folder is a refinement, not a precondition.
         const first = list[0];
         if (first) {
           const page = await fetchFolderCards(first.id);
@@ -127,15 +125,10 @@ export function LearnTab({ session }) {
     ? allWords
     : allWords.filter((w) => w.folderId === filterFolder);
 
-  // Teachers never persist SRS state (Task 1.8), so there is no progress to show. Every
-  // preview card reports the top level rather than "🌱 nicht gelernt", and due:0 keeps the
-  // whole folder flippable.
   const progressOf = (w) => (session.isTeacher ? TEACHER_PREVIEW : effProgress(w, progress[w.id]));
   const dueCards = scoped.filter((w) => isDue(progressOf(w)));
   const isLearned = (w) => (progressOf(w)?.level || 0) >= MASTERY_LEVEL;
 
-  // stats covers every assigned global word, including the ones this session did not
-  // fetch, so it cannot be recomputed locally — answers are applied to it as deltas.
   const gStats = stats
     ? (allFolders ? stats : (stats.perFolder && stats.perFolder[filterFolder]) || { total: 0, due: 0, learned: 0 })
     : null;
@@ -180,8 +173,6 @@ export function LearnTab({ session }) {
   async function answer(knew) {
     if (!card) return;
 
-    // Preview only: nothing is stored and the level stays at max, so both buttons just
-    // move to the next card.
     if (session.isTeacher) {
       setRevealed(false);
       setIdx((i) => (i >= dueCards.length - 1 ? 0 : i + 1));
@@ -198,10 +189,6 @@ export function LearnTab({ session }) {
     const val = { ...nx, rev: card.deRev || 0, nm, lp, lt };
     const staysDue = isDue(val);
     const newProgress = { ...progress, [card.id]: val };
-    // Hide the answer in the SAME commit as the progress change. Updating progress can
-    // drop the answered card from dueCards and slide the next card into view; if revealed
-    // were still true then, that next card would flash its translation during the async
-    // saveOneProgress write below. Resetting it here keeps the incoming card face-down.
     setRevealed(false);
     setProgress(newProgress);
 

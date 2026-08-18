@@ -3,7 +3,7 @@ import { getCollocationPractice } from "../../lib/api";
 import { loadVisibleFolders } from "../../data/loaders";
 import { loadCollocationProgress, saveOneCollocationProgress } from "../../data/collocations";
 import {
-  buildDeck, selectDueCollocations, answerCollocation, fullPhrase, reflexiveParts, separableParts,
+  buildDeck, selectDueCollocations, answerCollocation, fullPhrase, reflexiveParts, separableParts, declineStem,
 } from "../../lib/collocation";
 
 export function CollocationsPracticeTab({ session }) {
@@ -181,7 +181,7 @@ export function CollocationsPracticeTab({ session }) {
                   ? (current.cat === "Adjektiv"
                     ? <><span className="blank">_____</span> ist {current.de}</>
                     : <><span className="blank">_____</span> {current.de}</>)
-                  : <>{current.article && <span className="article">{current.article}</span>}{current.de} <span className="blank">_____</span></>}
+                  : <>{current.article && <span className="article">{declineStem(current.article, "", current.answerKasus)}</span>}{current.de} <span className="blank">_____</span></>}
           </div>
         </div>
 
@@ -211,7 +211,7 @@ export function CollocationsPracticeTab({ session }) {
             }}>
               {picked === correctId ? "✓ Richtig!" : "✕ Leider falsch"}
               <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)", marginTop: 6 }}>
-                „{fullPhrase(current, current.options.find((o) => o.id === correctId)?.text)}"
+                „{fullPhrase(current, current.options.find((o) => o.id === correctId)?.text, current.answerKasus)}"
               </div>
             </div>
             <button className="btn-add" style={{ marginTop: 14 }} onClick={next}>Weiter ›</button>

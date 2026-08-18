@@ -49,9 +49,6 @@ export default async function handler(req, res) {
       const gwSnap = await gwRef.get();
       if (gwSnap.exists) {
         const data = gwSnap.data();
-        // Mirror the global_words read rule (isTeacher() || isMember): the Admin SDK
-        // bypasses Firestore rules, so a student must not be able to read or cache a
-        // translation for a word that was never assigned to one of their classes.
         const isTeacher = user.teacher === true || user.admin === true;
         const isMember = Array.isArray(data.memberUids) && data.memberUids.includes(user.uid);
         if (!isTeacher && !isMember) {
@@ -60,10 +57,6 @@ export default async function handler(req, res) {
         }
         const norm = (s) => String(s || "").replace(/[ -]/g, " ").trim().slice(0, 90);
         const gde = norm(data.de);
-        // Only cache against the doc when it has a canonical `de`. A doc with empty `de`
-        // must never anchor a cache entry: with no word to compare, the freshness check
-        // below would accept an attacker-chosen translation as this doc's. (Rules forbid
-        // empty `de`, so this is defence-in-depth.) Falls through to the free-text path.
         if (gde) {
           wordRef = gwRef;
           const cached = data.t && data.t[lang] ? data.t[lang] : null;

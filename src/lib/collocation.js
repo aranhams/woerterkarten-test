@@ -73,7 +73,22 @@ export function separableParts(de) {
   return { prefix: "", stem: s };
 }
 
-export function fullPhrase(question, correctText) {
+const ARTICLE_DECLENSION = {
+  der: { akk: "den", dat: "dem" },
+  die: { akk: "die", dat: "der" },
+  das: { akk: "das", dat: "dem" },
+  ein: { akk: "einen", dat: "einem" },
+  eine: { akk: "eine", dat: "einer" },
+};
+
+export function declineStem(article, de, kasus) {
+  const de_ = String(de || "").trim();
+  const table = ARTICLE_DECLENSION[String(article || "").trim().toLowerCase()];
+  const declined = table && table[kasus];
+  return `${declined ? declined + " " : article ? article + " " : ""}${de_}`.trim();
+}
+
+export function fullPhrase(question, correctText, kasus = "none") {
   const stem = `${question?.article ? question.article + " " : ""}${question?.de || ""}`.trim();
   if (!correctText) return stem;
 
@@ -94,5 +109,6 @@ export function fullPhrase(question, correctText) {
   if (question?.partnerLabel === "Nomen") {
     return isAdj ? `${correctText} ist ${stem}` : `${correctText} ${stem}`;
   }
-  return `${stem} ${correctText}`;
+  const nounPhrase = declineStem(question?.article, question?.de, kasus);
+  return `${nounPhrase} ${correctText}`;
 }

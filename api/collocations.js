@@ -5,9 +5,26 @@ import { FieldValue } from "firebase-admin/firestore";
 import {
   COLLOC, clip, cleanText, normColloc, makeOption, isEligibleWord, baseCategory,
   countCorrect, countWrong, isPracticeReady, mergeGenerated, answerNormsOf, bumpRev,
-  generatePrompt, projectReadyQuestion, summarizeWeakCollocations,
-  WORD_CATEGORIES, PARTNER_LABELS,
+  generatePrompt, projectReadyQuestion, summarizeWeakCollocations, copyOptions,
+  WORD_CATEGORIES, PARTNER_LABELS, normKasus,
 } from "./_collocations.js";
+import { fetchWiktionaryWikitext, extractCollocations } from "./_pron.js";
+
+async function korpusPartners(de, L) {
+  try {
+    const fetched = await fetchWiktionaryWikitext(de);
+    if (fetched.status !== "ok") {
+      L.log("info", "colloc.korpus_miss", { reason: fetched.status });
+      return [];
+    }
+    const partners = extractCollocations(fetched.wikitext, { word: de });
+    L.log("info", "colloc.korpus_hit", { n: partners.length, partners });
+    return partners;
+  } catch (err) {
+    L.log("info", "colloc.korpus_failed", { err: err?.message });
+    return [];
+  }
+}
 
 const DAY_MS = 86_400_000;
 const BUDGET_MAX = 2000;
@@ -21,6 +38,7 @@ const FOLDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const TEACHER_ACTIONS = new Set([
   "opt-in", "opt-out", "bulk-opt-in-folder", "bulk-opt-in-ids", "bulk-opt-out-ids", "generate", "resync",
   "set-category", "add-option", "edit-option", "toggle-correct", "remove-option", "weak-collocations",
+  "add-variant", "remove-variant", "purge-sets",
 ]);
 const ROSTER_CAP = 500;
 const AI_ACTIONS = new Set(["generate"]);
@@ -58,6 +76,10 @@ async function loadWord(db, wordId) {
   return snap.data();
 }
 
+async function resolveBaseWord(db, set, wordId) {
+  return loadWord(db, set && set.variant ? String(set.baseWordId || "") : wordId);
+}
+
 function teacherView(set) {
   const options = Array.isArray(set.options) ? set.options : [];
   return {
@@ -70,7 +92,10 @@ function teacherView(set) {
     rev: set.rev || 0,
     cat: set.cat || null,
     partnerLabel: set.partnerLabel || null,
-    options: options.map((o) => ({ id: o.id, text: o.text, correct: !!o.correct, source: o.source || "manual" })),
+    variant: set.variant === true,
+    baseWordId: set.baseWordId || null,
+    variants: Array.isArray(set.variants) ? set.variants : [],
+    options: options.map((o) => ({ id: o.id, text: o.text, correct: !!o.correct, source: o.source || "manual", kasus: normKasus(o.kasus) })),
   };
 }
 
@@ -200,7 +225,6 @@ async function collocationManifest(db, uid) {
   return q.docs.map((d) => ({ id: d.id, folderId: d.data().folderId ?? null }));
 }
 
-// Teacher preview: show every opted-in collocation set, optionally scoped to a folder.
 async function teacherManifest(db, folderId = null) {
   if (folderId) {
     const wordSnap = await db.collection("global_words").where("folderId", "==", folderId).limit(FOLDER_CAP).get();
@@ -217,7 +241,7 @@ async function teacherManifest(db, folderId = null) {
     return out;
   }
   const snap = await db.collection("collocation_sets").where("optedIn", "==", true).limit(PRACTICE_CAP * 2).get();
-  const ids = snap.docs.map((d) => d.id);
+  const ids = snap.docs.filter((d) => d.data().variant !== true).map((d) => d.id);
   const wordSnaps = ids.length ? await db.getAll(...ids.map((id) => db.doc(`global_words/${id}`))) : [];
   const out = [];
   for (let i = 0; i < ids.length; i++) {
@@ -227,8 +251,6 @@ async function teacherManifest(db, folderId = null) {
   return out;
 }
 
-// The word ids a class assigns: every word in one of its folders, plus its loose wordIds.
-// Mirrors class-sync loadClassCorpus so visibility matches the rest of the app.
 async function classWordIds(db, cls) {
   const folderIds = [...new Set((cls.folders || []).map((e) => e && e.folderId).filter(Boolean))];
   const looseIds = [...new Set((cls.wordIds || []).map(String).filter(Boolean))];
@@ -252,6 +274,7 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const ids = [...folderOf.keys()];
 
       const questions = [];
+      const variantJobs = [];
       for (let i = 0; i < ids.length; i += GETALL_CHUNK) {
         const slice = ids.slice(i, i + GETALL_CHUNK);
         const refs = slice.flatMap((id) => [setRef(db, id), db.doc(`global_words/${id}`)]);
@@ -264,12 +287,29 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
             const wm = wordSnap.data().memberUids;
             if (!Array.isArray(wm) || !wm.includes(user.uid)) continue;
           }
-          const q = projectReadyQuestion(setSnap.data());
-          if (q) questions.push({ ...q, folderId: folderOf.get(slice[j]) ?? null });
+          const setData = setSnap.data();
+          const folderId2 = folderOf.get(slice[j]) ?? null;
+          const q = projectReadyQuestion(setData);
+          if (q) questions.push({ ...q, folderId: folderId2 });
+          for (const vId of (Array.isArray(setData.variants) ? setData.variants : [])) {
+            variantJobs.push({ vId, folderId: folderId2 });
+          }
         }
       }
 
-      ctx.L.log("info", "colloc.practice_set", { uid: user.uid, teacher: isTeacher, manifest: manifest.length, served: questions.length, folderId });
+      let variantCount = 0;
+      for (let i = 0; i < variantJobs.length; i += GETALL_CHUNK) {
+        const slice = variantJobs.slice(i, i + GETALL_CHUNK);
+        const snaps = slice.length ? await db.getAll(...slice.map((j) => setRef(db, j.vId))) : [];
+        for (let j = 0; j < slice.length; j++) {
+          const s = snaps[j];
+          if (!s.exists) continue;
+          const q = projectReadyQuestion(s.data());
+          if (q) { questions.push({ ...q, folderId: slice[j].folderId }); variantCount++; }
+        }
+      }
+
+      ctx.L.log("info", "colloc.practice_set", { uid: user.uid, teacher: isTeacher, manifest: manifest.length, served: questions.length, variants: variantCount, folderId });
       return { questions };
     }
 
@@ -329,7 +369,7 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const wordId = reqWordId(body.wordId);
       const existing = await loadSet(db, wordId);
       if (!existing) throw new HttpError(404, "Set nicht gefunden");
-      const word = await loadWord(db, wordId);
+      const word = await resolveBaseWord(db, existing, wordId);
       const de = clip(word.de, COLLOC.deLen);
       if (!de) throw new HttpError(400, "Wort ohne de");
       const article = clip(word.article, COLLOC.articleLen);
@@ -339,9 +379,6 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       }, stamp, user.uid);
     }
 
-    // Manual counterpart to AI categorization: lets the teacher set/clear the word's POS and
-    // the options' POS without generating. No rev bump — the correct answers are untouched,
-    // so learned progress stays valid.
     case "set-category": {
       const wordId = reqWordId(body.wordId);
       const existing = await loadSet(db, wordId);
@@ -415,13 +452,15 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const wordId = reqWordId(body.wordId);
       const existing = await loadSet(db, wordId);
       if (!existing || existing.optedIn !== true) throw new HttpError(400, "Wort nicht aktiviert");
+      if (existing.variant === true) throw new HttpError(400, "Für Duplikate keine KI-Generierung");
       const options = Array.isArray(existing.options) ? existing.options : [];
       if (options.length >= COLLOC.maxOptions) throw new HttpError(400, `Höchstens ${COLLOC.maxOptions} Optionen`);
       const word = await loadWord(db, wordId);
       const de = clip(word.de, COLLOC.deLen);
       const article = clip(word.article, COLLOC.articleLen);
+      const korpus = await korpusPartners(de, ctx.L);
       await spendBudget(ctx.day);
-      const ai = await callAnthropic(generatePrompt(de, article, options), ctx);
+      const ai = await callAnthropic(generatePrompt(de, article, options, korpus), ctx);
       const distractorTexts = Array.isArray(ai.distractors)
         ? ai.distractors.map((d) => (d && typeof d === "object" ? d.text : d)).filter((d) => typeof d === "string")
         : [];
@@ -436,6 +475,7 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const prevAnswers = answerNormsOf(options);
       const merged = mergeGenerated(options, {
         correct: cleanText(ai.correct, COLLOC.optionLen),
+        kasus: ai.kasus,
         distractors: distractorTexts.map((d) => cleanText(d, COLLOC.optionLen)),
       }, { uid: user.uid });
       if (merged.length === options.length) {
@@ -456,7 +496,7 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const options = Array.isArray(existing.options) ? existing.options.slice() : [];
       if (options.length >= COLLOC.maxOptions) throw new HttpError(400, `Höchstens ${COLLOC.maxOptions} Optionen`);
       const wantCorrect = body.correct === true;
-      const opt = makeOption(body.text, wantCorrect, "manual", { uid: user.uid });
+      const opt = makeOption(body.text, wantCorrect, "manual", { uid: user.uid, kasus: normKasus(body.kasus) });
       if (!opt) throw new HttpError(400, "Text erforderlich");
       if (options.some((o) => o.norm === opt.norm)) throw new HttpError(400, "Option existiert bereits");
       options.push(opt);
@@ -476,7 +516,8 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       if (!norm) throw new HttpError(400, "Text erforderlich");
       if (options.some((o, i) => i !== idx && o.norm === norm)) throw new HttpError(400, "Option existiert bereits");
       const prevAnswers = answerNormsOf(options);
-      options[idx] = { ...options[idx], text, norm, updatedAt: Date.now(), updatedBy: user.uid };
+      const kasusPatch = body.kasus !== undefined ? { kasus: normKasus(body.kasus) } : {};
+      options[idx] = { ...options[idx], text, norm, ...kasusPatch, updatedAt: Date.now(), updatedBy: user.uid };
       return persist(db, wordId, existing, { options, rev: bumpRev(existing.rev, prevAnswers, options) }, stamp, user.uid);
     }
 
@@ -510,6 +551,67 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       if (next.length === options.length) throw new HttpError(404, "Option nicht gefunden");
       const prevAnswers = answerNormsOf(options);
       return persist(db, wordId, existing, { options: next, rev: bumpRev(existing.rev, prevAnswers, next) }, stamp, user.uid);
+    }
+
+    case "add-variant": {
+      const baseWordId = reqWordId(body.baseWordId);
+      const base = await loadSet(db, baseWordId);
+      if (!base) throw new HttpError(404, "Set nicht gefunden");
+      if (base.variant === true) throw new HttpError(400, "Duplikat kann nicht dupliziert werden");
+      const variants = Array.isArray(base.variants) ? base.variants : [];
+      if (variants.length >= COLLOC.maxVariants) throw new HttpError(400, `Höchstens ${COLLOC.maxVariants} Duplikate`);
+      const word = await loadWord(db, baseWordId);
+      const de = clip(word.de, COLLOC.deLen);
+      if (!de) throw new HttpError(400, "Wort ohne de");
+      const article = clip(word.article, COLLOC.articleLen);
+      const partnerLabel = String(body.partnerLabel || "").trim();
+      if (partnerLabel && !PARTNER_LABELS.includes(partnerLabel)) throw new HttpError(400, "Partner-Wortart ungültig");
+      const cat = String(body.cat || "").trim();
+      if (cat && !WORD_CATEGORIES.includes(cat)) throw new HttpError(400, "Wortart ungültig");
+
+      const variantId = `cv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const options = copyOptions(base.options, { uid: user.uid });
+      const childBase = {
+        wordId: variantId, variant: true, baseWordId, optedIn: true,
+        de, article, deRev: word.deRev || 0,
+        cat: cat || base.cat || baseCategory(article).cat,
+        partnerLabel: partnerLabel || null,
+        options, rev: 0, gen: 0,
+        updatedAt: stamp(), updatedBy: user.uid,
+      };
+      await setRef(db, variantId).set(childBase, { merge: true });
+      const baseWrite = await persist(db, baseWordId, base, { variants: [...variants, variantId] }, stamp, user.uid);
+      return { base: baseWrite.set, variant: teacherView(childBase) };
+    }
+
+    case "remove-variant": {
+      const variantId = reqWordId(body.variantId);
+      const variant = await loadSet(db, variantId);
+      if (!variant || variant.variant !== true) throw new HttpError(404, "Duplikat nicht gefunden");
+      const baseWordId = String(variant.baseWordId || "");
+      await setRef(db, variantId).delete();
+      let baseView = null;
+      if (baseWordId) {
+        const base = await loadSet(db, baseWordId);
+        if (base) {
+          const variants = (Array.isArray(base.variants) ? base.variants : []).filter((id) => id !== variantId);
+          const baseWrite = await persist(db, baseWordId, base, { variants }, stamp, user.uid);
+          baseView = baseWrite.set;
+        }
+      }
+      return { base: baseView, removed: variantId };
+    }
+
+    case "purge-sets": {
+      const wordId = reqWordId(body.wordId);
+      const base = await loadSet(db, wordId);
+      if (!base) return { deleted: 0 };
+      const variants = Array.isArray(base.variants) ? base.variants : [];
+      const ids = [wordId, ...variants];
+      const batch = db.batch();
+      for (const id of ids) batch.delete(setRef(db, id));
+      await batch.commit();
+      return { deleted: ids.length };
     }
 
     default:

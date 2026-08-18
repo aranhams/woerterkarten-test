@@ -426,9 +426,6 @@ export function ProgressTab({ session }) {
     .sort((a, b) => (b.risk ?? -1) - (a.risk ?? -1) || a.r.username.localeCompare(b.r.username));
   const otherLabel = attention.length === 0 ? "Alle Schüler" : "Übrige Schüler";
 
-  // Trefferquote and Übungskonstanz come from meta/activity, which is never
-  // folder-scoped. They are aggregated over the whole roster on purpose: a student
-  // whose folders were unassigned must not take their practice history with them.
   const totReviews = rows.reduce((s, r) => s + (r.reviews30 || 0), 0);
   const totCorrect = rows.reduce((s, r) => s + (r.correct30 || 0), 0);
   const classAcc = totReviews >= 10 ? Math.round((totCorrect / totReviews) * 100) : null;

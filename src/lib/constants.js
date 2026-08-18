@@ -8,6 +8,7 @@ export const FOLDER_PAGE = 10;
 export const WORD_PAGE_SERVER = 15;
 export const NEW_PER_SESSION = 30;
 export const CARDS_CAP = 200;
+export const PRIVATE_WORD_LIMIT = 20;
 
 export { LANGUAGES } from "../../shared/languages.js";
 

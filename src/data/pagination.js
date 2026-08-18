@@ -85,8 +85,6 @@ export async function loadNextPage(state) {
   return next;
 }
 
-// Classic prev/next paging over the accumulated rows: forward fetches only when the
-// requested window is not loaded yet, backward is always free.
 export async function ensureWindow(state, index, size) {
   let next = state;
   const need = (index + 1) * size;

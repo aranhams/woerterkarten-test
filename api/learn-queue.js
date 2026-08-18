@@ -69,9 +69,6 @@ export default async function handler(req, res) {
       : null;
     let built = manifest === null;
 
-    // Safety net: any write path that forgets to patch the manifest shows up as a count
-    // mismatch here (1 aggregation read) and is repaired on the spot, rather than silently
-    // hiding words from Lernen while they stay visible in Wörter.
     if (!built) {
       const live = await db.collection("global_words")
         .where("memberUids", "array-contains", user.uid).count().get()
@@ -95,8 +92,6 @@ export default async function handler(req, res) {
       const snaps = await db.getAll(...slice.map((id) => db.doc(`global_words/${id}`)));
       for (const s of snaps) {
         if (!s.exists) { dropped++; continue; }
-        // `desc` is the teacher-only German riddle; strip it so it never rides along in
-        // the student learn-queue payload (UI-level hiding, see BESCHREIBUNGEN_PLAN §3.1).
         const { memberUids, deL, ruL, desc, ...w } = s.data();
         if (!Array.isArray(memberUids) || !memberUids.includes(user.uid)) { dropped++; continue; }
         dueWords.push({ ...w, id: s.id, source: "global" });

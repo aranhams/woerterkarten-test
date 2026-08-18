@@ -46,8 +46,6 @@ export function KurseTab({ session }) {
     setClasses((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }
 
-  // Only "sync" reloads: every other action patches local state from what it already
-  // knows, so a Kurse click costs no Firestore reads.
   async function call(action, payload) {
     setBusy(true);
     try {

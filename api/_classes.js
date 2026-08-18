@@ -96,8 +96,6 @@ async function readScopedFolders(db, folderIds) {
   return out;
 }
 
-// Mutates each existing manifest via `mutate(words) -> words | null`; null means no change.
-// Manifests that do not exist yet are skipped: /api/learn-queue builds them on demand.
 async function editManifests(db, uids, mutate) {
   const list = [...new Set(uids || [])].filter(Boolean);
   let written = 0;
@@ -143,8 +141,6 @@ function applyDiffs(db, diffs) {
 
 const entryFor = (id, w) => ({ i: id, f: w.folderId ?? null, r: w.deRev || 0 });
 
-// Word create / move / edit set memberUids straight from the client, so they never reach
-// recomputeDenorm and would leave manifests stale. Call this after any such write.
 export async function syncWordManifests(db, wordIds, prevMemberUids = []) {
   const ids = [...new Set(wordIds || [])].filter(Boolean);
   if (!ids.length) return 0;
@@ -168,9 +164,6 @@ export async function syncWordManifests(db, wordIds, prevMemberUids = []) {
 export async function recomputeDenorm(db, scope = null) {
   const full = !scope;
 
-  // Every class is read even in scoped mode: a folder shared by two classes derives its
-  // memberUids from both, so narrowing this would compute a wrong (too small) set.
-  // Classes are a handful of docs; the words/folders reads are what scoping saves.
   const classesSnap = await db.collection("classes").get();
   const { folderMembers, looseWordMembers } = membershipMaps(classesSnap.docs.map((d) => d.data()));
 

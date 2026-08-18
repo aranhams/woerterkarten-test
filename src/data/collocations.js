@@ -14,10 +14,22 @@ export async function loadCollocationSet(wordId) {
     rev: d.rev || 0,
     cat: d.cat || null,
     partnerLabel: d.partnerLabel || null,
+    variant: d.variant === true,
+    baseWordId: d.baseWordId || null,
+    variants: Array.isArray(d.variants) ? d.variants : [],
     options: (Array.isArray(d.options) ? d.options : []).map((o) => ({
       id: o.id, text: o.text, correct: o.correct === true, source: o.source || "manual",
+      kasus: o.kasus || "none",
     })),
   };
+}
+
+export async function loadVariantSets(variantIds) {
+  const ids = Array.isArray(variantIds) ? variantIds : [];
+  if (!ids.length) return [];
+  return (await Promise.all(
+    ids.map((id) => loadCollocationSet(id).catch(() => null)),
+  )).filter(Boolean);
 }
 
 export async function loadCollocationProgress(uid) {

@@ -4,7 +4,7 @@ import { db } from "../../lib/firebase";
 import { LIMIT, FOLDER_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields, buildDesc, descFresh } from "../../lib/word";
-import { classSync, requestPronunciation, resyncPronunciation } from "../../lib/api";
+import { classSync, requestPronunciation, resyncPronunciation, purgeCollocationSets } from "../../lib/api";
 import { pronState } from "../../lib/pron";
 import { loadGlobalFolders } from "../../data/loaders";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
@@ -371,6 +371,7 @@ export function ManageTab({ session }) {
       await dbDelete(`global_words/${id}`);
       setWords((prev) => prev.filter((w) => w.id !== id));
       classSync("cleanup", { wordId: id, memberUids }).catch(() => {});
+      purgeCollocationSets(id).catch(() => {});
     } catch { flash("⚠ Keine Berechtigung."); }
   }
   async function deleteFolder(id) {

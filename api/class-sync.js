@@ -9,13 +9,11 @@ import { MASTERY_LEVEL as COLL_MASTERY_LEVEL } from "./_collocations.js";
 
 const MAX_FAILS = 40;
 const WINDOW_MS = 15 * 60_000;
-// Per-student cap on how many of their own words a progress report pulls in.
 const PRIVATE_CAP = 500;
 const CHUNK = 30;
 const REPORT_TTL_MS = 120_000;
 const ROSTER_TTL_MS = 300_000;
 
-// Best-effort, per serverless instance. A miss just costs the normal read path.
 const reportCache = new Map();
 let rosterCache = null;
 
@@ -27,7 +25,6 @@ const chunks = (arr, n) => {
   return out;
 };
 
-// Reads only what a class actually assigns, instead of the whole corpus.
 async function loadClassCorpus(db, data) {
   const folderIds = [...new Set((data.folders || []).map((e) => e && e.folderId).filter(Boolean))];
   const looseIds = [...new Set((data.wordIds || []).map(String).filter(Boolean))];
@@ -339,8 +336,6 @@ async function dispatch({ db, auth, user, action, body, L }) {
       return { invalidated: 1, manifests };
     }
 
-    // Word create/move/edit stamp memberUids client-side and never reach recomputeDenorm,
-    // so the per-student manifests have to be patched explicitly.
     case "word-assigned": {
       const ids = (Array.isArray(body.wordIds) ? body.wordIds : [body.wordId])
         .filter(Boolean).map(String).filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id)).slice(0, 500);
@@ -460,9 +455,6 @@ async function dispatch({ db, auth, user, action, body, L }) {
           collocTotal, collocHard, collocMastered, collocHardWords,
         });
 
-        // Struggle history is keyed off the student's progress, not off what is
-        // assigned right now — otherwise unassigning a folder erases the evidence
-        // that they were struggling with it.
         for (const [wordId, p] of Object.entries(progressData)) {
           const w = wordById.get(wordId);
           if (!w || !p) continue;

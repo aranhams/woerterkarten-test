@@ -28,8 +28,6 @@ h1,h2,h3{font-family:'Lora',Georgia,serif;}
 .btn-main:hover{background:var(--ink-soft);} .btn-main:disabled{opacity:.4;cursor:not-allowed;}
 .auth-switch{margin-top:16px;font-size:13px;color:var(--sage);cursor:pointer;background:none;border:none;text-decoration:underline;font-family:inherit;display:block;width:100%;text-align:center;}
 .err{color:var(--red-soft);font-size:13px;margin-top:4px;} .ok{color:var(--sage);font-size:13px;margin-top:4px;}
-/* Grouped nav: each area is a full-width pill-bar with a caption; tabs flex to fill it,
-   so their width scales with how many the group has. */
 .nav-groups{display:flex;flex-direction:column;align-items:stretch;gap:12px;margin-bottom:22px;}
 .nav-group{display:flex;flex-direction:column;gap:6px;width:100%;}
 .nav-group-cap{font-size:9.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--sage-light);padding-left:6px;}
@@ -73,7 +71,6 @@ h1,h2,h3{font-family:'Lora',Georgia,serif;}
 .wi-text{flex:1;min-width:0;} .wi-de{font-weight:600;font-size:15px;overflow-wrap:anywhere;} .wi-article{color:var(--accent);font-style:italic;font-size:13px;margin-right:3px;}
 .wi-ru{font-size:13px;color:var(--ink-soft);margin-top:2px;overflow-wrap:anywhere;}
 .wi-folder{font-size:10px;background:var(--accent-pale);color:var(--accent);padding:2px 7px;border-radius:99px;font-weight:600;white-space:nowrap;}
-/* Beschreiben tab: the riddle is the row's content; clamp to two lines so the list stays scannable. */
 .dsc-riddle{font-size:14px;line-height:1.5;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .dsc-meta{display:flex;align-items:center;gap:8px;margin-top:8px;}
 .dsc-word-btn{font-family:inherit;font-weight:600;font-size:14px;color:var(--ink);background:none;border:none;padding:2px 4px;margin-left:-4px;border-radius:6px;cursor:pointer;transition:background .15s;}
@@ -109,6 +106,8 @@ h1,h2,h3{font-family:'Lora',Georgia,serif;}
 .article-input.invalid{border-color:var(--red-soft);background:var(--red-pale);}
 .btn-add{padding:9px 18px;background:var(--sage);color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s;white-space:nowrap;}
 .btn-add:hover{background:var(--ink);} .btn-add:disabled{opacity:.4;cursor:not-allowed;}
+.warn-box{display:flex;align-items:flex-start;gap:9px;background:var(--red-pale);border:1.5px solid var(--red-soft);border-radius:10px;padding:11px 13px;margin-bottom:12px;font-size:13px;line-height:1.45;color:var(--red-soft);}
+.warn-box-icon{flex:none;font-size:15px;line-height:1.3;}
 .sec-label{font-size:11px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px;margin-top:2px;}
 .folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:20px;}
 .folder-card{background:white;border-radius:12px;padding:16px 14px;box-shadow:0 1px 4px rgba(0,0,0,.06);cursor:pointer;border:2px solid transparent;transition:all .15s;}
@@ -149,9 +148,6 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 @media (max-width:640px){
   .auth-box input,.auth-box select,.form-row input,.add-form input,.add-form select,.add-form textarea,.filter-bar input,.filter-bar select{font-size:16px;}
   .btn-del{font-size:18px;padding:8px 11px;}
-  /* On phones each bar stays full width. Tabs grow to fill it (so Lernen's 3 tabs span
-     the whole bar) but never shrink below their label — a bar that can't fit (Unterrichten's
-     4) scrolls horizontally instead of colliding. */
   .nav-group-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
   .nav-group-tabs::-webkit-scrollbar{display:none;}
   .nav-tab{flex:1 0 auto;padding:8px 12px;}
@@ -169,7 +165,6 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .pron-badge.ready{background:var(--sage-pale);color:var(--sage);}
 .pron-badge.failed{background:var(--red-pale);color:var(--red-soft);}
 
-/* Collocation practice card */
 .colloc-card{background:white;border-radius:var(--radius);box-shadow:var(--shadow);padding:28px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:24px;}
 .colloc-prompt{display:flex;flex-direction:column;align-items:center;gap:10px;}
 .colloc-hint{font-size:10px;color:var(--sage-light);text-transform:uppercase;letter-spacing:.8px;}
@@ -185,11 +180,9 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .colloc-opt.correct{background:var(--sage-pale);border-color:var(--sage);color:var(--sage);}
 .colloc-opt.wrong{background:var(--red-pale);border-color:var(--red-soft);color:var(--red-soft);}
 
-/* Manage / Wörter modern layout */
 .manage-words-layout{display:flex;flex-direction:column;gap:18px;}
 .manage-words-list{display:flex;flex-direction:column;gap:10px;min-width:0;}
 
-/* Collapsible toggles */
 .options-toggle,.bulk-toggle{display:inline-flex;align-items:center;gap:8px;padding:4px 0;border:none;background:none;font-family:inherit;font-size:13px;color:var(--ink);cursor:pointer;transition:color .15s;margin-bottom:4px;font-weight:600;}
 .options-toggle:hover,.bulk-toggle:hover{color:var(--ink);}
 .options-toggle:hover .toggle-text,.bulk-toggle:hover .toggle-text{text-decoration:underline;}
@@ -201,7 +194,6 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .bulk-toggle[aria-expanded="true"]::before{transform:rotate(90deg);}
 .bulk-count-chip{font-size:11px;font-weight:600;color:var(--sage);background:var(--sage-pale);padding:2px 8px;border-radius:99px;}
 
-/* Folder list drag & drop */
 .folder-row{display:flex;align-items:center;gap:8px;padding:8px 6px;border-top:1px solid var(--ivory-dark);transition:background .12s;cursor:grab;}
 .folder-row:first-of-type{border-top:none;}
 .folder-row.dragging{opacity:.5;cursor:grabbing;}
@@ -209,7 +201,6 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .folder-drag-handle{color:var(--ivory-dark);font-size:14px;letter-spacing:-2px;cursor:grab;padding:0 2px;user-select:none;}
 .folder-row:hover .folder-drag-handle{color:var(--sage);}
 
-/* Sticky list header */
 .words-header-sticky{position:sticky;top:0;z-index:10;background:var(--ivory);padding:10px 0;border-bottom:1.5px solid var(--ivory-dark);}
 .words-header-main{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:space-between;}
 .words-select-all{display:flex;align-items:center;gap:8px;cursor:pointer;}
@@ -217,7 +208,6 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .words-header-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1;justify-content:flex-end;}
 .bulk-actions-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;padding:8px 12px;background:var(--sage-pale);border-radius:8px;}
 
-/* Redesigned word cards */
 .word-item-card{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);transition:box-shadow .15s,background .15s;}
 .word-item-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08);}
 .word-item-card.selected{background:var(--sage-pale);}
@@ -230,7 +220,6 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .wi-tools .pron-badge{flex-shrink:0;}
 .wi-tools .btn-sm,.wi-tools .btn-del{flex-shrink:0;}
 
-/* Empty state */
 .empty .emoji{font-size:44px;margin-bottom:14px;}
 .empty h3{font-size:18px;margin-bottom:6px;color:var(--ink);}
 .empty p{font-size:13px;color:var(--ink-soft);max-width:280px;margin:0 auto;}
