@@ -8,7 +8,7 @@ const GENUS_ARTICLE = { m: "der", f: "die", n: "das", 0: "die", "0": "die" };
 const DEFINITE = new Set(["der", "die", "das"]);
 
 export function resolveArticleAnswer(word) {
-  // The /api/article-quiz payload flattens genus onto the card; a raw word doc
+  // The /api/article payload flattens genus onto the card; a raw word doc
   // keeps it under pron. Accept either so both call sites resolve identically.
   const genus = word == null ? null
     : word.genus != null ? word.genus
@@ -31,6 +31,8 @@ export function buildArticleCards(words) {
       de: w.de || "",
       folderId: w.folderId ?? null,
       deRev: w.deRev || 0,
+      t: w.t || null,
+      imageUrl: w.imageUrl || null,
       answer: ans.article,
       answerSource: ans.source,
     });

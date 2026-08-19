@@ -1,12 +1,15 @@
 import { useState, useEffect } from "react";
-import { getArticleQuiz } from "../../lib/api";
+import { getArticleQuiz, translateWord } from "../../lib/api";
+import { withTrans } from "../../lib/word";
+import { clip, validImageUrl, cldImg } from "../../lib/format";
+import { LIMIT } from "../../lib/constants";
 import { loadVisibleFolders } from "../../data/loaders";
 import { loadArticleProgress, saveOneArticleProgress } from "../../data/articleProgress";
 import {
   buildArticleCards, buildArticleDeck, selectDueArticles, answerArticle, ARTICLE_OPTIONS,
 } from "../../lib/article";
 
-export function ArticleQuizTab({ session }) {
+export function ArticleTab({ session }) {
   const isTeacher = session.isTeacher;
 
   const [cards, setCards] = useState([]);
@@ -17,6 +20,9 @@ export function ArticleQuizTab({ session }) {
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState(null);
   const [round, setRound] = useState({ answered: 0, correct: 0 });
+  const [showTrans, setShowTrans] = useState(false);
+  const [trans, setTrans] = useState({});
+  const [translatedIds, setTranslatedIds] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -72,6 +78,20 @@ export function ArticleQuizTab({ session }) {
 
   const current = deck[idx] || null;
   const answered = picked !== null;
+  const currentTrans = current ? (trans[current.id] ?? withTrans(current, session.lang).ru ?? "") : "";
+
+  async function revealTranslation() {
+    setShowTrans(true);
+    if (!current || currentTrans || translatedIds.has(current.id)) return;
+    const id = current.id;
+    setTranslatedIds((s) => new Set(s).add(id));
+    try {
+      const parsed = await translateWord({ wordId: id, word: current.de, article: current.answer, lang: session.lang });
+      if (parsed.translation) setTrans((t) => ({ ...t, [id]: clip(parsed.translation, LIMIT.ru) }));
+    } catch {
+      setTranslatedIds((s) => { const n = new Set(s); n.delete(id); return n; });
+    }
+  }
 
   const stats = selectDueArticles(
     isTeacher ? cards.map((c) => ({ ...c, deRev: -1 })) : cards,
@@ -92,6 +112,7 @@ export function ArticleQuizTab({ session }) {
 
   function next() {
     setPicked(null);
+    setShowTrans(false);
     setIdx((i) => i + 1);
   }
 
@@ -99,6 +120,7 @@ export function ArticleQuizTab({ session }) {
     setDeck(buildArticleDeck(isTeacher ? cards.map((c) => ({ ...c, deRev: -1 })) : cards, isTeacher ? {} : progress));
     setIdx(0);
     setPicked(null);
+    setShowTrans(false);
     setRound({ answered: 0, correct: 0 });
   }
 
@@ -171,6 +193,9 @@ export function ArticleQuizTab({ session }) {
       <div className="colloc-card">
         <div className="colloc-prompt">
           <div className="colloc-hint">Welcher Artikel?</div>
+          {current.imageUrl && validImageUrl(current.imageUrl) && (
+            <img src={cldImg(current.imageUrl, 600)} className="fc-img" alt="" decoding="async" />
+          )}
           <div className="colloc-phrase">
             <span className="blank">___</span> {current.de}
           </div>
@@ -191,6 +216,35 @@ export function ArticleQuizTab({ session }) {
               </button>
             );
           })}
+        </div>
+
+        <div
+          className="article-trans"
+          style={{
+            textAlign: "center",
+            marginTop: 8,
+            marginBottom: 4,
+            paddingTop: 14,
+            borderTop: "1px solid var(--ivory-dark)",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", color: "var(--ink-soft)", marginBottom: 8 }}>
+            Übersetzung
+          </div>
+          {showTrans ? (
+            <div className="fc-ru" style={{ fontSize: 16, fontWeight: 600 }}>
+              {currentTrans || <span style={{ color: "#ccc", fontSize: 14 }}>⏳ Wird übersetzt…</span>}
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="fc-tap"
+              style={{ background: "none", border: "none", cursor: "pointer", font: "inherit" }}
+              onClick={revealTranslation}
+            >
+              Übersetzung anzeigen
+            </button>
+          )}
         </div>
 
         {answered && (

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { getCollocationPractice } from "../../lib/api";
+import { validImageUrl, cldImg } from "../../lib/format";
 import { loadVisibleFolders } from "../../data/loaders";
 import { loadCollocationProgress, saveOneCollocationProgress } from "../../data/collocations";
 import {
@@ -172,6 +173,9 @@ export function CollocationsPracticeTab({ session }) {
       <div className="colloc-card">
         <div className="colloc-prompt">
           <div className="colloc-hint">Welches Wort passt?{current.partnerLabel ? ` (${current.partnerLabel})` : ""}</div>
+          {current.imageUrl && validImageUrl(current.imageUrl) && (
+            <img src={cldImg(current.imageUrl, 600)} className="fc-img" alt="" decoding="async" />
+          )}
           <div className="colloc-phrase">
             {current.cat === "Reflexivverb"
               ? (() => { const { pron, verb } = reflexiveParts(current.de); return <><span className="reflexive">{pron}</span> <span className="blank">_____</span> {verb}</>; })()

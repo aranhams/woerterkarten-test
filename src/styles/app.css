@@ -156,6 +156,10 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
   .nav-group-tabs,.learn-subnav{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
   .nav-group-tabs::-webkit-scrollbar,.learn-subnav::-webkit-scrollbar{display:none;}
   .nav-tab,.learn-subtab{flex:1 0 auto;padding:8px 12px;}
+  .word-item-card{flex-direction:column;align-items:stretch;gap:8px;}
+  .word-card-main{width:100%;}
+  .wi-tools{margin-left:0;width:100%;justify-content:flex-end;}
+  .wi-tools select{flex:1;min-width:0;max-width:none;}
 }
 .fc-word-row{display:flex;align-items:center;justify-content:center;gap:20px;max-width:100%;}
 .fc-word-row .fc-word{min-width:0;}

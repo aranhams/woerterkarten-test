@@ -16,7 +16,7 @@ import { StudentsTab } from "./components/tabs/StudentsTab";
 import { AdminTab } from "./components/tabs/AdminTab";
 import { DescribeTab } from "./components/tabs/DescribeTab";
 import { CollocationsPracticeTab } from "./components/tabs/CollocationsPracticeTab";
-import { ArticleQuizTab } from "./components/tabs/ArticleQuizTab";
+import { ArticleTab } from "./components/tabs/ArticleTab";
 
 const TAB_KEY = "dw_tab";
 const LEARN_MODE_KEY = "dw_learn_mode";
@@ -134,7 +134,7 @@ export default function App() {
     </nav>
     {tab === "learn" && learnerTabs && (<>
       {learnMode === "cards" && <LearnTab session={session} />}
-      {learnMode === "article" && <ArticleQuizTab session={session} />}
+      {learnMode === "article" && <ArticleTab session={session} />}
       {learnMode === "collearn" && <CollocationsPracticeTab session={session} />}
     </>)}
     {tab === "words" && learnerTabs && <WordsTab session={session} />}

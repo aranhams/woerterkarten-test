@@ -14,11 +14,13 @@ function toCard(id, w) {
     deRev: w.deRev || 0,
     folderId: w.folderId ?? null,
     genus: w.pron && "genus" in w.pron ? w.pron.genus : null,
+    t: w.t || null,
+    imageUrl: w.imageUrl || null,
   };
 }
 
 export default async function handler(req, res) {
-  const L = requestLogger("article-quiz", req);
+  const L = requestLogger("article", req);
   applyCors(req, res);
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") {

@@ -117,7 +117,7 @@ export async function getCollocationPractice({ folderId = null } = {}) {
 
 export async function getArticleQuiz({ folderId = null } = {}) {
   const token = await idToken();
-  const res = await fetch("/api/article-quiz", {
+  const res = await fetch("/api/article", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ folderId }),

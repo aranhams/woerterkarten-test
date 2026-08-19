@@ -289,10 +289,11 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
           }
           const setData = setSnap.data();
           const folderId2 = folderOf.get(slice[j]) ?? null;
+          const imageUrl = wordSnap.data().imageUrl || null;
           const q = projectReadyQuestion(setData);
-          if (q) questions.push({ ...q, folderId: folderId2 });
+          if (q) questions.push({ ...q, folderId: folderId2, imageUrl });
           for (const vId of (Array.isArray(setData.variants) ? setData.variants : [])) {
-            variantJobs.push({ vId, folderId: folderId2 });
+            variantJobs.push({ vId, folderId: folderId2, imageUrl });
           }
         }
       }
@@ -305,7 +306,7 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
           const s = snaps[j];
           if (!s.exists) continue;
           const q = projectReadyQuestion(s.data());
-          if (q) { questions.push({ ...q, folderId: slice[j].folderId }); variantCount++; }
+          if (q) { questions.push({ ...q, folderId: slice[j].folderId, imageUrl: slice[j].imageUrl }); variantCount++; }
         }
       }
 
