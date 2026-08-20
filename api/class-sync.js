@@ -6,6 +6,7 @@ import { recomputeDenorm, genUniqueJoinCode, makeCode, syncWordManifests, dropFr
 import { resolveUid } from "./_users.js";
 import { summarizeStudent, summarizeActivity, summarizeTrend, dayKey, effLevel, isDueEff, isHardFor, resolveArticleAnswer, summarizeHardArticles, MASTERY_LEVEL } from "./_progress.js";
 import { MASTERY_LEVEL as COLL_MASTERY_LEVEL } from "./_collocations.js";
+import { isValidDuration, computeExpiresAt, repeatIsLive, normalizeRepeatEntry } from "../shared/repeat.js";
 
 const MAX_FAILS = 40;
 const WINDOW_MS = 15 * 60_000;
@@ -13,6 +14,7 @@ const PRIVATE_CAP = 500;
 const CHUNK = 30;
 const REPORT_TTL_MS = 120_000;
 const ROSTER_TTL_MS = 300_000;
+const ARTICLE_CFG = "article_config/settings";
 
 const reportCache = new Map();
 let rosterCache = null;
@@ -57,6 +59,8 @@ const TEACHER_ACTIONS = new Set([
   "set-folders", "set-folder-audience", "release-folder", "set-words",
   "sync", "cleanup", "word-updated", "word-assigned",
   "progress-report", "student-progress-detail",
+  "start-repeat", "stop-repeat", "remove-repeat",
+  "set-article-full",
 ]);
 const ADMIN_ACTIONS = new Set(["reset-student-password"]);
 const ALL_ACTIONS = new Set([...TEACHER_ACTIONS, "join"]);
@@ -583,6 +587,77 @@ async function dispatch({ db, auth, user, action, body, L }) {
       return { words: wordRows, folders, activity, privateWords, privateFolders };
     }
 
+    case "start-repeat": {
+      const { ref, data } = await loadClass(body.classId);
+      const rawIds = Array.isArray(body.folderIds)
+        ? body.folderIds
+        : (body.folderId ? [body.folderId] : []);
+      const folderIds = [...new Set(rawIds.map(String).filter(Boolean))].slice(0, 25);
+      if (!folderIds.length) throw new HttpError(400, "Kein Ordner ausgewählt");
+      const assignedSet = new Set((data.folders || []).map((e) => e && e.folderId).filter(Boolean));
+      for (const fid of folderIds) {
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(fid)) throw new HttpError(400, "folderId ungültig");
+        if (!assignedSet.has(fid)) throw new HttpError(400, "Ordner ist dem Kurs nicht zugewiesen");
+      }
+      const duration = body.duration === null || body.duration === undefined ? null : Number(body.duration);
+      if (!isValidDuration(duration)) throw new HttpError(400, "Dauer ungültig");
+
+      const folderSnaps = await db.getAll(...folderIds.map((fid) => db.doc(`global_folders/${fid}`)));
+      const label = folderSnaps
+        .map((s) => { const fd = s.exists ? s.data() : {}; return `${fd.icon || "📁"} ${fd.name || "Ordner"}`; })
+        .join(" · ").slice(0, 120);
+
+      // Firestore forbids serverTimestamp() inside array elements, so entries
+      // store startedAt as a millis number.
+      const now = Date.now();
+      const entry = {
+        id: makeCode(12),
+        folderIds,
+        label,
+        startedBy: user.uid,
+        startedAt: now,
+        expiresAt: computeExpiresAt(duration, now),
+      };
+      // Keep only still-live entries, migrating any legacy singular directive, then append.
+      const existing = Array.isArray(data.repeats)
+        ? data.repeats
+        : (repeatIsLive(data.repeat) ? [normalizeRepeatEntry(data.repeat)] : []);
+      const repeats = [...existing.filter((e) => e.expiresAt == null || now < e.expiresAt), entry].slice(-20);
+      await ref.update({ repeats, repeat: FieldValue.delete(), updatedAt: stamp() });
+      return { repeats, entry };
+    }
+
+    case "remove-repeat": {
+      const { ref, data } = await loadClass(body.classId);
+      const id = String(body.repeatId || "");
+      if (!id) throw new HttpError(400, "repeatId fehlt");
+      const now = Date.now();
+      const existing = Array.isArray(data.repeats)
+        ? data.repeats
+        : (repeatIsLive(data.repeat) ? [normalizeRepeatEntry(data.repeat)] : []);
+      const repeats = existing.filter((e) => e.id !== id && (e.expiresAt == null || now < e.expiresAt));
+      await ref.update({ repeats, repeat: FieldValue.delete(), updatedAt: stamp() });
+      return { repeats };
+    }
+
+    case "stop-repeat": {
+      const { ref } = await loadClass(body.classId);
+      await ref.update({ repeats: [], repeat: FieldValue.delete(), updatedAt: stamp() });
+      return {};
+    }
+
+    case "set-article-full": {
+      const uid = String(body.uid || "");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(uid)) throw new HttpError(400, "uid ungültig");
+      const full = body.full === true;
+      await db.doc(ARTICLE_CFG).set(
+        { fullUids: full ? FieldValue.arrayUnion(uid) : FieldValue.arrayRemove(uid) },
+        { merge: true },
+      );
+      rosterCache = null;
+      return { uid, full };
+    }
+
     default:
       throw new HttpError(400, "Unknown action");
   }
@@ -599,11 +674,15 @@ async function listAllStudents(db, auth) {
     pageToken = res.pageToken;
   } while (pageToken);
 
-  const snap = await db.collection("users").get();
+  const [snap, cfg] = await Promise.all([
+    db.collection("users").get(),
+    db.doc(ARTICLE_CFG).get(),
+  ]);
+  const fullUids = new Set(Array.isArray(cfg.data()?.fullUids) ? cfg.data().fullUids : []);
   const students = [];
   for (const d of snap.docs) {
     if (teacherUids.has(d.id)) continue;
-    students.push({ uid: d.id, username: d.data().username || d.id.slice(0, 6) });
+    students.push({ uid: d.id, username: d.data().username || d.id.slice(0, 6), articleFull: fullUids.has(d.id) });
   }
   students.sort((a, b) => a.username.localeCompare(b.username));
   return students;

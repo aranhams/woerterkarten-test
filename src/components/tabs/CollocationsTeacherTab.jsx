@@ -14,6 +14,7 @@ const MAX_VARIANTS = 3;
 const SERVED_WRONG = 3;
 const WORD_CATEGORIES = ["Nomen", "Verb", "Reflexivverb", "Trennbares Verb", "Adjektiv", "Adverb", "Sonstige"];
 const PARTNER_LABELS = ["Nomen", "Verb", "Adjektiv", "Adverb"];
+const LINK_VERBS = ["ist", "wird", "bleibt", "scheint", "wirkt"];
 const countCorrect = (opts) => (opts || []).filter((o) => o.correct).length;
 const countWrong = (opts) => (opts || []).filter((o) => !o.correct).length;
 const isReady = (set) => set?.optedIn === true && countCorrect(set.options) >= 1 && countWrong(set.options) >= SERVED_WRONG;
@@ -232,9 +233,9 @@ export function CollocationsTeacherTab({ session }) {
     const r = await act("opt-out", { wordId: w.id }, "Deaktiviert", w.id);
     if (r) putSet(w.id, r.set);
   }
-  async function generate(w) {
-    const r = await act("generate", { wordId: w.id }, "✓ KI-Optionen ergänzt", w.id);
-    if (r) putSet(w.id, r.set);
+  async function generate(set) {
+    const r = await act("generate", { wordId: set.wordId }, "✓ KI-Optionen ergänzt", baseIdOf(set));
+    if (r) applyResult(set.wordId, baseIdOf(set), r.set);
   }
   async function resync(set) {
     const r = await act("resync", { wordId: set.wordId }, "✓ Als aktuell markiert", baseIdOf(set));
@@ -265,18 +266,29 @@ export function CollocationsTeacherTab({ session }) {
     const r = await act("set-category", { wordId: set.wordId, cat, partnerLabel }, "✓ Wortart gespeichert", baseIdOf(set));
     if (r) applyResult(set.wordId, baseIdOf(set), r.set);
   }
+  async function saveLinkVerb(set, linkVerb) {
+    const r = await act("set-link-verb", { wordId: set.wordId, linkVerb }, "✓ Verb gespeichert", baseIdOf(set));
+    if (r) applyResult(set.wordId, baseIdOf(set), r.set);
+  }
   async function addVariant(w, partnerLabel) {
     if (rowBusy) return;
     setRowBusy(true);
     try {
-      const r = await addCollocationVariant(w.id, partnerLabel);
+      const r = await addCollocationVariant(w.id, partnerLabel, true);
       setSets((s) => {
         const base = s[w.id];
         if (!base) return s;
         const variantSets = [...(base.variantSets || []), r.variant];
         return { ...s, [w.id]: { ...base, ...r.base, variantSets } };
       });
-      flash("✓ Duplikat angelegt", w.id);
+      flash(`✓ Duplikat angelegt – KI erzeugt ${partnerLabel}-Optionen…`, w.id);
+      try {
+        const g = await collocationSync("generate", { wordId: r.variant.wordId });
+        if (g?.set) putVariant(w.id, g.set);
+        flash("✓ Duplikat mit KI-Optionen erstellt", w.id);
+      } catch (e) {
+        flash("Duplikat angelegt, KI fehlgeschlagen: " + (e.message || "Fehler") + ". Optionen manuell ergänzen.", w.id);
+      }
     } catch (e) {
       flash("⚠ " + (e.message || "Fehler"), w.id);
     } finally {
@@ -371,7 +383,7 @@ export function CollocationsTeacherTab({ session }) {
     }
   }
 
-  function renderSetBody(set, w, allowAI) {
+  function renderSetBody(set, w, allowAI, allowDeactivate = allowAI) {
     const options = set.options || [];
     const nCorrect = countCorrect(options);
     const nWrong = countWrong(options);
@@ -385,7 +397,7 @@ export function CollocationsTeacherTab({ session }) {
           <span style={{ fontSize: 13, color: "var(--red-soft)", fontWeight: 600, flex: "1 1 200px" }}>
             ⚠ Das Wort wurde geändert{set.de && normDe(set.de) !== normDe(w.de) ? ` (früher „${set.de}")` : ""}. Die Optionen passen evtl. nicht mehr.
           </span>
-          {allowAI && <button className="btn-sm" onClick={() => generate(w)} disabled={rowBusy || options.length >= MAX_OPTIONS} title="Neue passende Optionen ergänzen">🤖 Neu generieren</button>}
+          {allowAI && <button className="btn-sm" onClick={() => generate(set)} disabled={rowBusy || options.length >= MAX_OPTIONS} title="Neue passende Optionen ergänzen">🤖 Neu generieren</button>}
           <button className="btn-sm" onClick={() => resync(set)} disabled={rowBusy} title="Optionen sind noch passend – Hinweis ausblenden">✓ Passt noch</button>
         </div>
       )}
@@ -414,6 +426,17 @@ export function CollocationsTeacherTab({ session }) {
             {PARTNER_LABELS.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </label>
+        {set.partnerLabel === "Adjektiv" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "var(--ink-soft)" }}>
+            Verbindungsverb
+            <select value={set.linkVerb || "ist"} disabled={rowBusy} aria-label="Verb zwischen Nomen und Adjektiv"
+              title={"Verb, das auf der Karte Nomen und Adjektiv verbindet (z. B. „Der Flughafen ist international“)"}
+              onChange={(e) => saveLinkVerb(set, e.target.value)}
+              style={{ padding: "5px 8px", border: "1.5px solid var(--ivory-dark)", borderRadius: 7, fontSize: 12, background: "white", color: "var(--ink)", fontFamily: "inherit", outline: "none" }}>
+              {LINK_VERBS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </label>
+        )}
         {!set.partnerLabel && (
           <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>Schüler sehen sonst keinen Hinweis zur Wortart</span>
         )}
@@ -480,18 +503,14 @@ export function CollocationsTeacherTab({ session }) {
       )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        {allowAI ? (
-          <button className="btn-add" onClick={() => generate(w)} disabled={rowBusy || options.length >= MAX_OPTIONS}
-            title={options.length >= MAX_OPTIONS ? `Höchstens ${MAX_OPTIONS} Optionen` : "Optionen per KI ergänzen"}>
-            {rowBusy ? "⏳…" : `🤖 KI: ${Math.max(0, 4 - options.length) > 0 ? `auffüllen (${Math.max(0, 4 - options.length)})` : "+1 Option"}`}
-          </button>
-        ) : (
-          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Optionen für Duplikate werden von der Lehrkraft eingegeben.</span>
-        )}
+        <button className="btn-add" onClick={() => generate(set)} disabled={rowBusy || options.length >= MAX_OPTIONS}
+          title={options.length >= MAX_OPTIONS ? `Höchstens ${MAX_OPTIONS} Optionen` : "Optionen per KI ergänzen"}>
+          {rowBusy ? "⏳…" : `🤖 KI: ${Math.max(0, 4 - options.length) > 0 ? `auffüllen (${Math.max(0, 4 - options.length)})` : "+1 Option"}`}
+        </button>
         <button className="btn-sm" onClick={() => setManual(manualOpen ? null : { setId: set.wordId, text: "", correct: nCorrect === 0, kasus: "akk" })} disabled={rowBusy || options.length >= MAX_OPTIONS}>
           ＋ Option manuell
         </button>
-        {allowAI && <button className="btn-sm danger" onClick={() => optOut(w)} disabled={rowBusy} style={{ marginLeft: "auto" }}>Deaktivieren</button>}
+        {allowDeactivate && <button className="btn-sm danger" onClick={() => optOut(w)} disabled={rowBusy} style={{ marginLeft: "auto" }}>Deaktivieren</button>}
       </div>
 
       {manualOpen && (
@@ -555,7 +574,7 @@ export function CollocationsTeacherTab({ session }) {
           <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>🔁 Duplikate</span>
           <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>({nVariants}/{MAX_VARIANTS})</span>
           <span style={{ fontSize: 11, color: "var(--ink-soft)", flex: "1 1 100%" }}>
-            Gleiches Wort, andere Wortart der Optionen (z. B. Nomen→Adjektiv). Optionen werden manuell eingegeben.
+            Gleiches Wort, andere Wortart der Optionen (z. B. Verb→Adjektiv). Die KI erzeugt die Optionen beim Anlegen automatisch für die gewählte Wortart.
           </span>
         </div>
 
@@ -574,13 +593,13 @@ export function CollocationsTeacherTab({ session }) {
               </span>
               <button className="btn-del" onClick={() => removeVariant(w.id, v.wordId)} disabled={rowBusy} title="Duplikat entfernen" style={{ marginLeft: "auto" }}>✕ Duplikat</button>
             </div>
-            {renderSetBody(v, w, false)}
+            {renderSetBody(v, w, true, false)}
           </div>
         ))}
 
         {addOpen ? (
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 12px", background: "var(--ivory)", border: "1px solid var(--ivory-dark)", borderRadius: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-soft)" }}>Wortart der Optionen:</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-soft)" }}>Neue Wortart der Optionen (KI generiert automatisch):</span>
             {PARTNER_LABELS.map((pl) => (
               <button key={pl} className="btn-sm" onClick={() => { setVariantAdd(null); addVariant(w, pl); }} disabled={rowBusy}>{pl}</button>
             ))}
@@ -588,7 +607,7 @@ export function CollocationsTeacherTab({ session }) {
           </div>
         ) : (
           <button className="btn-sm" onClick={() => setVariantAdd(w.id)} disabled={rowBusy || atCap || loading}
-            title={atCap ? `Höchstens ${MAX_VARIANTS} Duplikate` : loading ? "Lädt…" : "Wort duplizieren, um eine andere Wortart zu üben"}>
+            title={atCap ? `Höchstens ${MAX_VARIANTS} Duplikate` : loading ? "Lädt…" : "Wort duplizieren – die KI erzeugt Optionen für eine andere Wortart"}>
             ＋ Duplikat anlegen
           </button>
         )}

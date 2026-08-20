@@ -4,7 +4,7 @@ import { LIMIT, WORD_PAGE_SERVER, PRIVATE_WORD_LIMIT } from "../../lib/constants
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields, withTrans } from "../../lib/word";
 import { effProgress, lvlEmoji, MASTERY_LEVEL } from "../../lib/srs";
-import { translateWord, requestPronunciation } from "../../lib/api";
+import { translateWord, requestPronunciation, lookupGenus } from "../../lib/api";
 import {
   loadVisibleFolders, loadUserFolders, loadUserWords, loadProgress, cachePron,
   personalSearchFieldsReady, markPersonalSearchFieldsReady, healPersonalSearchFields,
@@ -17,6 +17,28 @@ import { WordCardModal } from "../WordCardModal";
 
 const SEARCH_DEBOUNCE = 350;
 const MIN_QUERY = 2;
+const VALID_ARTICLES = ["der", "die", "das", "ein", "eine", "-"];
+
+const AMBIGUOUS_ARTICLE_MS = 1000;
+
+function isValidArticle(v) {
+  return VALID_ARTICLES.includes(String(v || "").trim().toLowerCase());
+}
+
+function isCompleteArticle(v) {
+  const t = String(v || "").trim().toLowerCase();
+  if (!VALID_ARTICLES.includes(t)) return false;
+  return !VALID_ARTICLES.some((a) => a !== t && a.startsWith(t));
+}
+
+const ARTICLE_GENUS = { der: ["m"], die: ["f"], das: ["n"], ein: ["m", "n"], eine: ["f"] };
+
+function articleGenusConflict(article, genus) {
+  if (!genus) return false;
+  const allowed = ARTICLE_GENUS[String(article || "").trim().toLowerCase()];
+  if (!allowed) return false;
+  return !allowed.includes(genus);
+}
 
 function nextReviewText(due) {
   if (!due || Date.now() >= due) return "jetzt fällig";
@@ -38,6 +60,9 @@ export function WordsTab({ session }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [translating, setTranslating] = useState(false);
+  const [articleError, setArticleError] = useState("");
+  const [editArticleError, setEditArticleError] = useState("");
+  const [checkingArticle, setCheckingArticle] = useState(false);
   const [edit, setEdit] = useState(null);
   const [editTranslating, setEditTranslating] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -48,6 +73,23 @@ export function WordsTab({ session }) {
   const [selectedWords, setSelectedWords] = useState(new Set());
   const searchTimer = useRef(null);
   const searchSeq = useRef(0);
+  const deInputRef = useRef(null);
+  const editDeInputRef = useRef(null);
+  const articleInputRef = useRef(null);
+  const editArticleInputRef = useRef(null);
+  const articleTimer = useRef(null);
+
+  function scheduleArticleJump(v, srcRef, dstRef) {
+    clearTimeout(articleTimer.current);
+    if (isCompleteArticle(v)) { dstRef.current?.focus(); return; }
+    if (isValidArticle(v)) {
+      articleTimer.current = setTimeout(() => {
+        if (document.activeElement === srcRef.current) dstRef.current?.focus();
+      }, AMBIGUOUS_ARTICLE_MS);
+    }
+  }
+
+  useEffect(() => () => clearTimeout(articleTimer.current), []);
 
   const pageKey = (fid, src = sourceFilter) => `words_page1:${session.uid}:${fid || "all"}:${src}`;
 
@@ -260,6 +302,19 @@ export function WordsTab({ session }) {
     ? 0 : Math.max(0, privateTotal - Math.min(masteredPrivate, privateTotal));
   const canCreate = privateTotal == null || unmasteredPrivate < PRIVATE_WORD_LIMIT;
 
+  async function articleGenusError(articleVal, deVal) {
+    const a = String(articleVal || "").trim().toLowerCase();
+    const word = deVal.trim();
+    if (!word || !ARTICLE_GENUS[a]) return "";
+    try {
+      const { genus } = await lookupGenus(word);
+      if (articleGenusConflict(a, genus)) {
+        return `Der Artikel „${a}" ist für „${word}" nicht korrekt. Bitte korrigiere ihn.`;
+      }
+    } catch { /* Wiktionary nicht erreichbar → nicht blockieren */ }
+    return "";
+  }
+
   async function addWord() {
     if (!de.trim() || !ru.trim()) return;
     if (!canCreate) {
@@ -267,6 +322,10 @@ export function WordsTab({ session }) {
       return;
     }
     if (imageUrl && !validImageUrl(imageUrl)) { alert("Ungültige Bild-URL."); return; }
+    setCheckingArticle(true);
+    const artErr = await articleGenusError(article, de).finally(() => setCheckingArticle(false));
+    if (artErr) { setArticleError(artErr); return; }
+    setArticleError("");
     const id = `p_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const w = {
       de: clip(de.trim(), LIMIT.de), article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru),
@@ -344,6 +403,10 @@ export function WordsTab({ session }) {
     if (!word) return;
     const res = validateWordInput(edit, { requireRu: true });
     if (!res.ok) { alert(res.error); return; }
+    setCheckingArticle(true);
+    const artErr = await articleGenusError(edit.article, edit.de).finally(() => setCheckingArticle(false));
+    if (artErr) { setEditArticleError(artErr); return; }
+    setEditArticleError("");
     const changedDe = germanChanged(word, res.clean);
     const patch = {
       ...res.clean, folderId: edit.folderId || null, deRev: nextDeRev(word, res.clean),
@@ -397,12 +460,13 @@ export function WordsTab({ session }) {
         </div>
       )}
       <div className="form-row">
-        <input className="in-sm" placeholder="der/die/das" value={article} onChange={(e) => setArticle(e.target.value)} />
-        <input placeholder="Deutsches Wort" value={de} maxLength={LIMIT.de} onChange={(e) => setDe(e.target.value)} />
+        <input ref={articleInputRef} className={`in-sm article-input${articleError ? " invalid" : ""}`} placeholder="der/die/das" value={article} onChange={(e) => { setArticle(e.target.value); setArticleError(""); scheduleArticleJump(e.target.value, articleInputRef, deInputRef); }} />
+        <input ref={deInputRef} placeholder="Deutsches Wort" value={de} maxLength={LIMIT.de} onChange={(e) => { setDe(e.target.value); setArticleError(""); }} />
         <button className="btn-add" onClick={autoTranslate} disabled={!de.trim() || translating} style={{ background: "var(--accent)", flexShrink: 0 }}>
           {translating ? "⏳" : "🤖"}
         </button>
       </div>
+      {articleError && <p className="err" style={{ marginBottom: 10 }}>⚠ {articleError}</p>}
       <div className="form-row">
         <input placeholder="Übersetzung (Muttersprache)" value={ru} maxLength={LIMIT.ru} onChange={(e) => setRu(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addWord()} />
       </div>
@@ -415,7 +479,7 @@ export function WordsTab({ session }) {
       </div>
       <div className="form-row" style={{ alignItems: "flex-end" }}>
         <ImageUpload value={imageUrl} onChange={setImageUrl} small />
-        <button className="btn-add" onClick={addWord} disabled={!de.trim() || !ru.trim() || !canCreate} style={{ alignSelf: "flex-end" }}>+</button>
+        <button className="btn-add" onClick={addWord} disabled={!de.trim() || !ru.trim() || !canCreate || checkingArticle} style={{ alignSelf: "flex-end" }}>{checkingArticle ? "⏳" : "+"}</button>
       </div>
     </div>
     <div className="filter-bar">
@@ -460,10 +524,11 @@ export function WordsTab({ session }) {
             <div className="word-item" key={w.id} style={{ flexWrap: "wrap" }}>
               <div className="add-form" style={{ width: "100%", margin: 0 }}>
                 <div className="form-row">
-                  <input className="in-sm" placeholder="der/die/das" value={edit.article} onChange={(e) => setEdit({ ...edit, article: e.target.value })} />
-                  <input placeholder="Deutsches Wort" value={edit.de} maxLength={LIMIT.de} onChange={(e) => setEdit({ ...edit, de: e.target.value })} />
+                  <input ref={editArticleInputRef} className={`in-sm article-input${editArticleError ? " invalid" : ""}`} placeholder="der/die/das" value={edit.article} onChange={(e) => { setEdit({ ...edit, article: e.target.value }); setEditArticleError(""); scheduleArticleJump(e.target.value, editArticleInputRef, editDeInputRef); }} />
+                  <input ref={editDeInputRef} placeholder="Deutsches Wort" value={edit.de} maxLength={LIMIT.de} onChange={(e) => { setEdit({ ...edit, de: e.target.value }); setEditArticleError(""); }} />
                   <button className="btn-add" onClick={autoTranslateEdit} disabled={!edit.de.trim() || editTranslating} style={{ background: "var(--accent)", flexShrink: 0 }}>{editTranslating ? "⏳" : "🤖"}</button>
                 </div>
+                {editArticleError && <p className="err" style={{ margin: "0 0 8px" }}>⚠ {editArticleError}</p>}
                 <div className="form-row">
                   <input placeholder="Übersetzung (Muttersprache)" value={edit.ru} maxLength={LIMIT.ru} onChange={(e) => setEdit({ ...edit, ru: e.target.value })} />
                 </div>
@@ -477,8 +542,8 @@ export function WordsTab({ session }) {
                 <div className="form-row" style={{ alignItems: "flex-end" }}>
                   <ImageUpload value={edit.imageUrl} onChange={(url) => setEdit({ ...edit, imageUrl: url })} small />
                   <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
-                    <button className="btn-sm" onClick={saveEdit} disabled={!edit.de.trim() || !edit.ru.trim()}>Speichern</button>
-                    <button className="btn-sm" onClick={() => setEdit(null)}>Abbrechen</button>
+                    <button className="btn-sm" onClick={saveEdit} disabled={!edit.de.trim() || !edit.ru.trim() || checkingArticle}>{checkingArticle ? "⏳" : "Speichern"}</button>
+                    <button className="btn-sm" onClick={() => { setEdit(null); setEditArticleError(""); }}>Abbrechen</button>
                   </div>
                 </div>
               </div>

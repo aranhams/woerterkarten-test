@@ -6,7 +6,7 @@ import {
   COLLOC, clip, cleanText, normColloc, makeOption, isEligibleWord, baseCategory,
   countCorrect, countWrong, isPracticeReady, mergeGenerated, answerNormsOf, bumpRev,
   generatePrompt, projectReadyQuestion, summarizeWeakCollocations, copyOptions,
-  WORD_CATEGORIES, PARTNER_LABELS, normKasus,
+  WORD_CATEGORIES, PARTNER_LABELS, normKasus, relationOf, normLinkVerb,
 } from "./_collocations.js";
 import { fetchWiktionaryWikitext, extractCollocations } from "./_pron.js";
 
@@ -37,7 +37,7 @@ const FOLDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 const TEACHER_ACTIONS = new Set([
   "opt-in", "opt-out", "bulk-opt-in-folder", "bulk-opt-in-ids", "bulk-opt-out-ids", "generate", "resync",
-  "set-category", "add-option", "edit-option", "toggle-correct", "remove-option", "weak-collocations",
+  "set-category", "set-link-verb", "add-option", "edit-option", "toggle-correct", "remove-option", "weak-collocations",
   "add-variant", "remove-variant", "purge-sets",
 ]);
 const ROSTER_CAP = 500;
@@ -92,6 +92,7 @@ function teacherView(set) {
     rev: set.rev || 0,
     cat: set.cat || null,
     partnerLabel: set.partnerLabel || null,
+    linkVerb: normLinkVerb(set.linkVerb),
     variant: set.variant === true,
     baseWordId: set.baseWordId || null,
     variants: Array.isArray(set.variants) ? set.variants : [],
@@ -391,6 +392,13 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       return persist(db, wordId, existing, { cat: cat || null, partnerLabel: partnerLabel || null }, stamp, user.uid);
     }
 
+    case "set-link-verb": {
+      const wordId = reqWordId(body.wordId);
+      const existing = await loadSet(db, wordId);
+      if (!existing) throw new HttpError(404, "Set nicht gefunden");
+      return persist(db, wordId, existing, { linkVerb: normLinkVerb(body.linkVerb) }, stamp, user.uid);
+    }
+
     case "bulk-opt-in-folder": {
       const folderId = reqFolderId(body.folderId);
       const snap = await db.collection("global_words").where("folderId", "==", folderId).limit(FOLDER_CAP).get();
@@ -453,15 +461,16 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       const wordId = reqWordId(body.wordId);
       const existing = await loadSet(db, wordId);
       if (!existing || existing.optedIn !== true) throw new HttpError(400, "Wort nicht aktiviert");
-      if (existing.variant === true) throw new HttpError(400, "Für Duplikate keine KI-Generierung");
+      const isVariant = existing.variant === true;
       const options = Array.isArray(existing.options) ? existing.options : [];
       if (options.length >= COLLOC.maxOptions) throw new HttpError(400, `Höchstens ${COLLOC.maxOptions} Optionen`);
-      const word = await loadWord(db, wordId);
+      const word = await resolveBaseWord(db, existing, wordId);
       const de = clip(word.de, COLLOC.deLen);
       const article = clip(word.article, COLLOC.articleLen);
+      const relation = relationOf(existing.cat || baseCategory(article).cat, existing.partnerLabel);
       const korpus = await korpusPartners(de, ctx.L);
       await spendBudget(ctx.day);
-      const ai = await callAnthropic(generatePrompt(de, article, options, korpus), ctx);
+      const ai = await callAnthropic(generatePrompt(de, article, options, korpus, { relation }), ctx);
       const distractorTexts = Array.isArray(ai.distractors)
         ? ai.distractors.map((d) => (d && typeof d === "object" ? d.text : d)).filter((d) => typeof d === "string")
         : [];
@@ -484,7 +493,9 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       }
       return persist(db, wordId, existing, {
         de, article, deRev: word.deRev || 0,
-        cat: clip(ai.category, COLLOC.labelLen) || existing.cat || baseCategory(article).cat,
+        cat: isVariant
+          ? (existing.cat || baseCategory(article).cat)
+          : (clip(ai.category, COLLOC.labelLen) || existing.cat || baseCategory(article).cat),
         partnerLabel: existing.partnerLabel || clip(ai.partnerLabel, COLLOC.labelLen) || null,
         gen: (existing.gen || 0) + 1, options: merged, rev: bumpRev(existing.rev, prevAnswers, merged),
       }, stamp, user.uid);
@@ -571,12 +582,13 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       if (cat && !WORD_CATEGORIES.includes(cat)) throw new HttpError(400, "Wortart ungültig");
 
       const variantId = `cv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-      const options = copyOptions(base.options, { uid: user.uid });
+      const options = body.autofill === true ? [] : copyOptions(base.options, { uid: user.uid });
       const childBase = {
         wordId: variantId, variant: true, baseWordId, optedIn: true,
         de, article, deRev: word.deRev || 0,
         cat: cat || base.cat || baseCategory(article).cat,
         partnerLabel: partnerLabel || null,
+        linkVerb: partnerLabel === "Adjektiv" ? normLinkVerb(body.linkVerb) : null,
         options, rev: 0, gen: 0,
         updatedAt: stamp(), updatedBy: user.uid,
       };

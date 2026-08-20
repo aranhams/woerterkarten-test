@@ -185,7 +185,9 @@ export function CollocationsPracticeTab({ session }) {
                   ? (current.cat === "Adjektiv"
                     ? <><span className="blank">_____</span> ist {current.de}</>
                     : <><span className="blank">_____</span> {current.de}</>)
-                  : <>{current.article && <span className="article">{declineStem(current.article, "", current.answerKasus)}</span>}{current.de} <span className="blank">_____</span></>}
+                  : current.partnerLabel === "Adjektiv"
+                    ? <>{current.article && <span className="article">{declineStem(current.article, "", current.answerKasus)}</span>}{current.de} {current.linkVerb || "ist"} <span className="blank">_____</span></>
+                    : <>{current.article && <span className="article">{declineStem(current.article, "", current.answerKasus)}</span>}{current.de} <span className="blank">_____</span></>}
           </div>
         </div>
 

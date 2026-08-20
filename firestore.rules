@@ -27,6 +27,7 @@ service cloud.firestore {
           && d.source == source
           && isStr(d.addedBy, 64)
           && (!('deRev' in d)     || d.deRev is int)
+          && (!('artOff' in d)    || d.artOff is bool)
           && (!('deL' in d)       || isStr(d.deL, 100))
           && (!('ruL' in d)       || isStr(d.ruL, 200))
           && (!('updatedBy' in d) || d.updatedBy == request.auth.uid)   // un-spoofable
@@ -39,7 +40,7 @@ service cloud.firestore {
     function wordKeysOk(source) {
       let d = request.resource.data;
       return source == 'global'
-        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron', 't', 'desc'])
+        ? d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'memberUids', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron', 't', 'desc', 'artOff'])
         : d.keys().hasOnly(['de', 'article', 'ru', 'example', 'folderId', 'imageUrl', 'addedBy', 'source', 'deRev', 'deL', 'ruL', 'updatedAt', 'updatedBy', 'pron']);
     }
 

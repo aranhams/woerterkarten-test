@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { LIMIT, CLASS_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
-import { classSync } from "../../lib/api";
+import { classSync, startRepeat, removeRepeat } from "../../lib/api";
+import { listLiveRepeats } from "../../../shared/repeat.js";
 import { loadAllClasses, loadGlobalFolders } from "../../data/loaders";
 import { clearDataCache } from "../../data/cache";
 import { newPageState, loadNextPage, searchState, ensureWindow, windowRows, canGoNext } from "../../data/pagination";
@@ -22,8 +23,11 @@ export function KurseTab({ session }) {
   const [renameVal, setRenameVal] = useState("");
   const [copyMsg, setCopyMsg] = useState("");
   const [roster, setRoster] = useState([]);
+  const [articleFullSet, setArticleFullSet] = useState(() => new Set());
   const [studentSearch, setStudentSearch] = useState("");
   const [classSearch, setClassSearch] = useState("");
+  const [repeatFolders, setRepeatFolders] = useState(() => new Set());
+  const [repeatDuration, setRepeatDuration] = useState("1");
 
   async function reload() {
     clearDataCache();
@@ -35,15 +39,30 @@ export function KurseTab({ session }) {
     (async () => {
       const [cs, gf] = await Promise.all([loadAllClasses(), loadGlobalFolders()]);
       setClasses(cs); setFolders(gf);
-      try { const r = await classSync("list-students"); setRoster(r.students || []); } catch {}
+      try {
+        const r = await classSync("list-students");
+        setRoster(r.students || []);
+        setArticleFullSet(new Set((r.students || []).filter((s) => s.articleFull).map((s) => s.uid)));
+      } catch {}
       setLoading(false);
     })();
   }, []);
+
+  useEffect(() => { setRepeatFolders(new Set()); setRepeatDuration("1"); }, [selectedId]);
 
   function flash(m) { setMsg(m); setTimeout(() => setMsg(""), 3000); }
 
   function patchClass(id, patch) {
     setClasses((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }
+
+  async function toggleArticleFull(uid, full) {
+    setArticleFullSet((prev) => { const n = new Set(prev); if (full) n.add(uid); else n.delete(uid); return n; });
+    try {
+      await call("set-article-full", { uid, full });
+    } catch {
+      setArticleFullSet((prev) => { const n = new Set(prev); if (full) n.delete(uid); else n.add(uid); return n; });
+    }
   }
 
   async function call(action, payload) {
@@ -92,6 +111,20 @@ export function KurseTab({ session }) {
   const folderState = (fid) => {
     const e = (selected?.folders || []).find((x) => x.folderId === fid);
     return e ? e.audience : "off";
+  };
+  const assignedFolders = selected
+    ? folders.filter((f) => (selected.folders || []).some((e) => e && e.folderId === f.id))
+    : [];
+  const liveRepeats = selected ? listLiveRepeats(selected) : [];
+  const fmtRemaining = (expiresAt) => {
+    if (expiresAt == null) return "unbegrenzt";
+    const ms = expiresAt - Date.now();
+    if (ms <= 0) return "abgelaufen";
+    const days = Math.floor(ms / 86400000);
+    const hours = Math.floor((ms % 86400000) / 3600000);
+    const when = new Date(expiresAt).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" });
+    if (days >= 1) return `noch ${days} ${days === 1 ? "Tag" : "Tage"} (${when})`;
+    return `noch ${Math.max(1, hours)} Std. (${when})`;
   };
 
   async function createClass() {
@@ -176,6 +209,28 @@ export function KurseTab({ session }) {
   }
   async function sync() {
     try { const r = await call("sync", {}); flash(`✓ Synchronisiert (${r.stamped} aktualisiert)`); } catch {}
+  }
+  function onRepeatFolderSelect(e) {
+    setRepeatFolders(new Set([...e.target.selectedOptions].map((o) => o.value)));
+  }
+  async function addRepeat() {
+    if (!selected || repeatFolders.size === 0) return;
+    const duration = repeatDuration === "none" ? null : Number(repeatDuration);
+    try {
+      const r = await startRepeat(selected.id, [...repeatFolders], duration);
+      patchClass(selected.id, { repeats: r.repeats, repeat: null });
+      setRepeatFolders(new Set());
+      setRepeatDuration("1");
+      flash("✓ Wiederholung hinzugefügt");
+    } catch (e) { flash("⚠ " + (e.message || "Fehler")); }
+  }
+  async function deleteRepeat(repeatId) {
+    if (!selected) return;
+    try {
+      const r = await removeRepeat(selected.id, repeatId);
+      patchClass(selected.id, { repeats: r.repeats, repeat: null });
+      flash("✓ Wiederholung beendet");
+    } catch (e) { flash("⚠ " + (e.message || "Fehler")); }
   }
   async function copyCode(code) {
     try {
@@ -264,12 +319,27 @@ export function KurseTab({ session }) {
             <div className="sec-label">Im Kurs ({members.length})</div>
             <div className="transfer-list">
               {members.length === 0 && <div className="transfer-empty">Noch keine Schüler.</div>}
-              {members.map((uid) => (
-                <button key={uid} className="transfer-item rm" onClick={() => removeStudent(uid)} disabled={busy} title="Aus dem Kurs entfernen">
-                  <span className="ti-name">{nameOf(uid)}</span>
-                  <span className="ti-act" style={{ color: "var(--red-soft)" }}>✕</span>
-                </button>
-              ))}
+              {members.map((uid) => {
+                const full = articleFullSet.has(uid);
+                return (
+                  <div key={uid} className="transfer-item member-row">
+                    <span className="ti-name">{nameOf(uid)}</span>
+                    <button
+                      type="button"
+                      className="artikel-toggle"
+                      onClick={() => toggleArticleFull(uid, !full)}
+                      disabled={busy}
+                      title={full
+                        ? "Volles Artikeltraining: übt alle zugewiesenen Nomen, auch die im Kurs ausgeschalteten (für Neulinge). Tippen für normal."
+                        : "Normales Artikeltraining: folgt den Artikel-Schaltern der Kurswörter. Tippen für voll (Neuling)."}
+                    >
+                      <span className="artikel-toggle-label">Artikel: {full ? "voll" : "normal"}</span>
+                      <span className={`switch${full ? " on" : ""}`}><span className="switch-knob" /></span>
+                    </button>
+                    <button className="ti-rm-btn" onClick={() => removeStudent(uid)} disabled={busy} title="Aus dem Kurs entfernen">✕</button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -317,6 +387,51 @@ export function KurseTab({ session }) {
             </div>
           );
         })}
+      </div>
+
+      <div className="add-form">
+        <div className="sec-label" style={{ marginTop: 0 }}>🔁 Wiederholung</div>
+        <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>
+          Lässt die Schüler ausgewählte Ordner erneut durchgehen — auch bereits gemeisterte Wörter. Der Fortschritt und die Statistik der Schüler bleiben dabei unverändert. Du kannst mehrere Wiederholungen mit unterschiedlicher Dauer gleichzeitig laufen lassen.
+        </p>
+        {liveRepeats.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div className="sec-label">Aktive Wiederholungen ({liveRepeats.length})</div>
+            {liveRepeats.map((e) => (
+              <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: "1px solid var(--ivory-dark)", padding: "8px 0" }}>
+                <span style={{ fontSize: 13, flex: 1, minWidth: 160 }}>
+                  <span style={{ color: "var(--sage)", fontWeight: 600 }}>Aktiv</span>
+                  {" — "}{e.label || "Ordner"} · endet {fmtRemaining(e.expiresAt)}
+                </span>
+                <button className="btn-sm danger" onClick={() => deleteRepeat(e.id)} disabled={busy}>Beenden</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {assignedFolders.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Weise dem Kurs zuerst einen Ordner zu (oben).</p>
+        ) : (<>
+          <div className="sec-label">Neue Wiederholung — Ordner auswählen ({repeatFolders.size})</div>
+          <select multiple value={[...repeatFolders]} onChange={onRepeatFolderSelect}
+            size={Math.min(assignedFolders.length, 6)}
+            style={{ width: "100%", padding: 6, border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit", marginBottom: 6 }}>
+            {assignedFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+          </select>
+          <p style={{ fontSize: 11, color: "var(--ink-soft)", marginBottom: 10 }}>
+            Mehrfachauswahl: Strg/Cmd oder Umschalt gedrückt halten.
+          </p>
+          <div className="form-row" style={{ flexWrap: "wrap" }}>
+            <select value={repeatDuration} onChange={(e) => setRepeatDuration(e.target.value)} style={{ flex: "0 1 130px" }}>
+              <option value="1">1 Tag</option>
+              <option value="3">3 Tage</option>
+              <option value="7">7 Tage</option>
+              <option value="none">Unbegrenzt</option>
+            </select>
+            <button className="btn-add" onClick={addRepeat} disabled={busy || repeatFolders.size === 0}>
+              Hinzufügen
+            </button>
+          </div>
+        </>)}
       </div>
 
       <div className="add-form">

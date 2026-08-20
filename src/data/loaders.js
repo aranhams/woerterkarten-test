@@ -1,6 +1,7 @@
-import { collection, query, where, increment, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, getDocs, increment, serverTimestamp } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { lowerKey } from "../lib/word";
+import { listLiveRepeats } from "../../shared/repeat.js";
 import { dbGet, dbSet } from "./db";
 import { cachedGetAll, cachedQuery, cacheHas, cacheGet, cacheSet, cacheUpdate } from "./cache";
 
@@ -117,4 +118,21 @@ export async function loadVisibleFolders(session) {
 
 export function cachePron(session, word, pron) {
   if (word.source !== "global") cacheUpdate(`users/${session.uid}/words`, word.id, { pron });
+}
+
+// Uncached, on-demand read of the student's classes to surface every live repeat.
+// A class may run several concurrent repeats; each becomes its own banner entry.
+// Deliberately not cached: a teacher can start/stop a repeat at any time and the
+// banners must reflect the current state without a full reload.
+export async function loadActiveRepeats(uid) {
+  try {
+    const snap = await getDocs(query(collection(db, "classes"), where("memberUids", "array-contains", uid)));
+    const out = [];
+    for (const d of snap.docs) {
+      for (const e of listLiveRepeats(d.data())) {
+        out.push({ classId: d.id, repeatId: e.id, folderIds: e.folderIds, label: e.label, expiresAt: e.expiresAt, startedAt: e.startedAt });
+      }
+    }
+    return out;
+  } catch (err) { console.warn("[db] loadActiveRepeats", err); return []; }
 }

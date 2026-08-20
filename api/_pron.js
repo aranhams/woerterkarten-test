@@ -340,6 +340,22 @@ function toPronMap(entry) {
   };
 }
 
+export async function lookupGenus(db, de, L) {
+  const word = nfc(de);
+  if (!word || !isLookupable(word)) return { genus: null };
+  const snap = await db.doc(`pron_lex/${pronKey(word)}`).get().catch(() => null);
+  const cached = snap && snap.exists ? snap.data() : null;
+  if (cached && cached.gc) return { genus: cached.genus ?? null };
+  const fetched = await fetchWiktionaryWikitext(word).catch(() => ({ status: "error" }));
+  if (fetched.status !== "ok") {
+    L.log("info", "pron.genus_miss", { reason: fetched.status });
+    return { genus: null };
+  }
+  const section = germanSection(fetched.wikitext);
+  const g = section ? extractGenus(section) : { genus: null };
+  return { genus: g.genus ?? null };
+}
+
 export async function ensurePron(db, de, L) {
   const word = nfc(de);
   const ref = db.doc(`pron_lex/${pronKey(word)}`);

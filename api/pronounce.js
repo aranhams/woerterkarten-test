@@ -1,7 +1,7 @@
 import { verifyBearer, applyCors, getDb } from "./_firebase.js";
 import { rateLimit, clientIp } from "./_ratelimit.js";
 import { requestLogger } from "./_log.js";
-import { ensurePron, PRON_V } from "./_pron.js";
+import { ensurePron, lookupGenus, PRON_V } from "./_pron.js";
 
 const WORD_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_RESYNC = 25;
@@ -112,6 +112,30 @@ export default async function handler(req, res) {
 
       L.done("info", "pron.word", 200, { uid: user.uid, scope, status: out.status, external: out.external });
       return res.status(200).json({ ok: true, status: out.status, pron: out.pron || null });
+    }
+
+    if (action === "genus") {
+      const checks = [
+        ["min", `pron:genus:${user.uid}`, { max: 40, windowMs: 60_000 }],
+        ["day", `pron:genus:day:${user.uid}:${day}`, { max: 400, windowMs: DAY_MS }],
+        ["ip", `pron:genus:ip:${clientIp(req)}`, { max: 120, windowMs: 60_000 }],
+      ];
+      for (const [scope, key, opts] of checks) {
+        const r = await rateLimit(key, opts);
+        if (r.limited) {
+          L.done("warn", "pron.genus_ratelimited", 429, { uid: user.uid, scope, degraded: r.degraded });
+          res.setHeader("Retry-After", String(r.retryAfterSec));
+          return res.status(429).json({ error: "Too many requests" });
+        }
+      }
+      const de = String(body.de || "").normalize("NFC").trim();
+      if (!de) {
+        L.done("warn", "pron.genus_bad", 400, { uid: user.uid });
+        return res.status(400).json({ error: "Wort fehlt" });
+      }
+      const { genus } = await lookupGenus(db, de, L);
+      L.done("info", "pron.genus", 200, { uid: user.uid, genus });
+      return res.status(200).json({ ok: true, genus });
     }
 
     if (action === "resync") {

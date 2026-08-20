@@ -7,10 +7,12 @@ import { translateWord, getLearnQueue } from "../../lib/api";
 import {
   loadVisibleFolders, loadUserWords, loadUserFolders,
   loadProgress, saveOneProgress, queueActivity, flushActivity, cachePron,
+  loadActiveRepeats,
 } from "../../data/loaders";
 import { newPageState, loadNextPage } from "../../data/pagination";
 import { usePronunciation } from "../../data/usePron";
 import { SpokenWord } from "../Pronunciation";
+import { RepeatSession } from "../RepeatSession";
 
 const TEACHER_PREVIEW = { level: INTERVALS.length - 1, due: 0 };
 
@@ -29,9 +31,34 @@ export function LearnTab({ session }) {
   const [loading, setLoading] = useState(true);
   const [queueError, setQueueError] = useState("");
   const [translatedIds, setTranslatedIds] = useState(() => new Set());
+  const [activeRepeats, setActiveRepeats] = useState([]);
+  const [repeatSession, setRepeatSession] = useState(null);
+  const [dismissedRepeats, setDismissedRepeats] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("dw_repeat_dismissed") || "[]")); } catch { return new Set(); }
+  });
   const fetching = useRef(false);
 
   useEffect(() => () => { flushActivity(); }, []);
+
+  useEffect(() => {
+    if (session.isTeacher) return;
+    let cancelled = false;
+    (async () => {
+      const r = await loadActiveRepeats(session.uid);
+      if (!cancelled) setActiveRepeats(r);
+    })();
+    return () => { cancelled = true; };
+  }, [session.uid, session.isTeacher]);
+
+  const repeatKey = (r) => `${r.classId}:${r.repeatId || r.startedAt || 0}`;
+  function dismissRepeat(r) {
+    setDismissedRepeats((prev) => {
+      const next = new Set(prev).add(repeatKey(r));
+      try { localStorage.setItem("dw_repeat_dismissed", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }
+  const visibleRepeats = activeRepeats.filter((r) => !dismissedRepeats.has(repeatKey(r)));
 
   useEffect(() => {
     let cancelled = false;
@@ -220,6 +247,10 @@ export function LearnTab({ session }) {
   const back = card ? (direction === "de2ru" ? { word: card.ru, isDE: false } : { article: card.article, word: card.de, isDE: true }) : null;
   const cardFolder = card ? folders.find((f) => f.id === card.folderId) : null;
 
+  if (repeatSession) {
+    return <RepeatSession session={session} repeat={repeatSession} onExit={() => { dismissRepeat(repeatSession); setRepeatSession(null); }} />;
+  }
+
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
   if (session.isTeacher && !filterFolder) {
@@ -234,6 +265,12 @@ export function LearnTab({ session }) {
 
   return (<>
     {queueError && <p className="err" style={{ marginBottom: 10 }}>⚠ {queueError}</p>}
+    {visibleRepeats.map((r) => (
+      <div key={repeatKey(r)} className="repeat-banner">
+        <span className="repeat-banner-txt">🔁 Deine Lehrerin möchte <strong>{r.label || "einen Ordner"}</strong> wiederholen.</span>
+        <button className="btn-add" onClick={() => setRepeatSession(r)}>Starten</button>
+      </div>
+    ))}
     <div className="stats-bar">
       <div className="stat"><div className="stat-n">{total}</div><div className="stat-l">Gesamt</div></div>
       <div className="stat"><div className={`stat-n${dueCards.length > 0 ? " due" : ""}`}>{dueTotal}</div><div className="stat-l">Zu lernen</div></div>

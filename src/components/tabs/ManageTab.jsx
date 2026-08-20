@@ -6,6 +6,7 @@ import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields, buildDesc, descFresh } from "../../lib/word";
 import { classSync, requestPronunciation, resyncPronunciation, purgeCollocationSets } from "../../lib/api";
 import { pronState } from "../../lib/pron";
+import { resolveArticleAnswer } from "../../lib/article";
 import { loadGlobalFolders } from "../../data/loaders";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
@@ -18,9 +19,16 @@ const WRITE_BATCH = 450;
 const SEARCH_DEBOUNCE = 350;
 const MIN_QUERY = 2;
 const VALID_ARTICLES = ["der", "die", "das", "ein", "eine", "-"];
+const AMBIGUOUS_ARTICLE_MS = 1000;
 
 function isValidArticle(v) {
   return VALID_ARTICLES.includes(String(v || "").trim().toLowerCase());
+}
+
+function isCompleteArticle(v) {
+  const t = String(v || "").trim().toLowerCase();
+  if (!VALID_ARTICLES.includes(t)) return false;
+  return !VALID_ARTICLES.some((a) => a !== t && a.startsWith(t));
 }
 
 function normalizeArticle(v) {
@@ -52,6 +60,9 @@ export function ManageTab({ session }) {
   const searchSeq = useRef(0);
   const deInputRef = useRef(null);
   const editDeInputRef = useRef(null);
+  const articleInputRef = useRef(null);
+  const editArticleInputRef = useRef(null);
+  const articleTimer = useRef(null);
   const [pageIdx, setPageIdx] = useState(0);
   const [articleTouched, setArticleTouched] = useState(false);
   const [editArticleTouched, setEditArticleTouched] = useState(false);
@@ -191,6 +202,29 @@ export function ManageTab({ session }) {
     } catch { flashRow(w.id, "⚠ Keine Berechtigung."); }
   }
 
+  async function toggleArtikel(w) {
+    const next = w.artOff !== true;
+    try {
+      await dbSet(`global_words/${w.id}`, { artOff: next, updatedAt: serverTimestamp(), updatedBy: session.uid });
+      setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, artOff: next, updatedAt: Date.now(), updatedBy: session.uid } : x)));
+      flashRow(w.id, next ? "✓ Artikeltraining aus" : "✓ Artikeltraining ein");
+    } catch { flashRow(w.id, "⚠ Keine Berechtigung."); }
+  }
+
+  async function bulkSetArtikel(off) {
+    const ids = Array.from(selectedWords);
+    const targets = words.filter((w) => ids.includes(w.id) && resolveArticleAnswer(w) && (w.artOff === true) !== off);
+    if (!targets.length) { flash("⚠ Keine passenden Nomen ausgewählt"); return; }
+    for (const w of targets) {
+      try {
+        await dbSet(`global_words/${w.id}`, { artOff: off, updatedAt: serverTimestamp(), updatedBy: session.uid });
+        setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, artOff: off, updatedAt: Date.now(), updatedBy: session.uid } : x)));
+      } catch { /* Sammelaktion: einzelne Fehler überspringen */ }
+    }
+    flash(off ? `✓ Artikeltraining für ${targets.length} Wörter aus` : `✓ Artikeltraining für ${targets.length} Wörter ein`);
+    clearSelection();
+  }
+
   function startWordEdit(w) {
     setWEdit({ id: w.id, de: w.de || "", article: w.article || "", ru: w.ru || "", example: w.example || "", folderId: w.folderId || "", imageUrl: w.imageUrl || "", desc: descFresh(w) ? w.desc.text : "" });
     setEditArticleTouched(false);
@@ -228,9 +262,21 @@ export function ManageTab({ session }) {
     } catch { flashRow(id, "⚠ Keine Berechtigung."); }
   }
 
+  function scheduleArticleJump(v, srcRef, dstRef) {
+    clearTimeout(articleTimer.current);
+    if (isCompleteArticle(v)) { dstRef.current?.focus(); return; }
+    if (isValidArticle(v)) {
+      articleTimer.current = setTimeout(() => {
+        if (document.activeElement === srcRef.current) dstRef.current?.focus();
+      }, AMBIGUOUS_ARTICLE_MS);
+    }
+  }
+
+  useEffect(() => () => clearTimeout(articleTimer.current), []);
+
   function onArticleChange(v) {
     setArticle(v);
-    if (isValidArticle(v)) deInputRef.current?.focus();
+    scheduleArticleJump(v, articleInputRef, deInputRef);
   }
 
   function onArticlePaste(e) {
@@ -248,7 +294,7 @@ export function ManageTab({ session }) {
 
   function onEditArticleChange(v) {
     setWEdit((prev) => ({ ...prev, article: v }));
-    if (isValidArticle(v)) editDeInputRef.current?.focus();
+    scheduleArticleJump(v, editArticleInputRef, editDeInputRef);
   }
 
   function onEditArticlePaste(e) {
@@ -504,6 +550,7 @@ export function ManageTab({ session }) {
           <h3>Einzelnes Wort hinzufügen</h3>
           <div className="form-row">
             <input
+              ref={articleInputRef}
               className={`in-sm article-input${isValidArticle(article) ? " valid" : articleTouched && article.trim() ? " invalid" : ""}`}
               placeholder="der/die/das/ein/eine"
               value={article}
@@ -625,6 +672,8 @@ export function ManageTab({ session }) {
                 {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
                 <option value="">📂 Kein Ordner</option>
               </select>
+              <button className="btn-sm" onClick={() => bulkSetArtikel(false)} title="Ausgewählte Nomen ins Artikeltraining aufnehmen">🔤 Training ein</button>
+              <button className="btn-sm" onClick={() => bulkSetArtikel(true)} title="Ausgewählte Nomen vom Artikeltraining ausschließen">🔤 Training aus</button>
               <button className="btn-sm danger" onClick={bulkDeleteSelected}>Löschen</button>
               <button className="btn-sm" onClick={clearSelection}>Auswahl aufheben</button>
             </div>
@@ -646,6 +695,7 @@ export function ManageTab({ session }) {
                 <div className="add-form" style={{ width: "100%", margin: 0 }}>
                   <div className="form-row">
                     <input
+                      ref={editArticleInputRef}
                       className={`in-sm article-input${isValidArticle(wEdit.article) ? " valid" : editArticleTouched && (wEdit.article || "").trim() ? " invalid" : ""}`}
                       placeholder="der/die/das/ein/eine"
                       value={wEdit.article}
@@ -691,6 +741,19 @@ export function ManageTab({ session }) {
                   </div>
                 </div>
                 <div className="wi-tools">
+                  {resolveArticleAnswer(w) && (
+                    <button
+                      type="button"
+                      className="artikel-toggle"
+                      onClick={() => toggleArtikel(w)}
+                      title={w.artOff === true
+                        ? "Aus dem Artikeltraining ausgeschlossen — zum Aktivieren tippen"
+                        : "Im Artikeltraining aktiv — zum Ausschließen tippen"}
+                    >
+                      <span className="artikel-toggle-label">Artikel</span>
+                      <span className={`switch${w.artOff === true ? "" : " on"}`}><span className="switch-knob" /></span>
+                    </button>
+                  )}
                   {(() => {
                     const s = pronState(w);
                     const label = s === "ready" ? "🔊" : s === "failed" ? "🔊" : "🔊";

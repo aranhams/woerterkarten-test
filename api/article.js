@@ -60,13 +60,22 @@ export default async function handler(req, res) {
       // Teacher preview: a single folder's words (no progress is saved).
       if (folderId) {
         const snap = await db.collection("global_words").where("folderId", "==", folderId).limit(CARDS_CAP).get();
-        for (const d of snap.docs) cards.push(toCard(d.id, d.data()));
+        for (const d of snap.docs) {
+          const w = d.data();
+          if (w.artOff === true) continue;
+          cards.push(toCard(d.id, w));
+        }
       }
     } else {
-      const snap = await db.collection("global_words")
-        .where("memberUids", "array-contains", user.uid).limit(CARDS_CAP).get();
+      const [snap, cfg] = await Promise.all([
+        db.collection("global_words").where("memberUids", "array-contains", user.uid).limit(CARDS_CAP).get(),
+        db.doc("article_config/settings").get(),
+      ]);
+      const fullUids = Array.isArray(cfg.data()?.fullUids) ? cfg.data().fullUids : [];
+      const fullDrill = fullUids.includes(user.uid);
       for (const d of snap.docs) {
         const w = d.data();
+        if (w.artOff === true && !fullDrill) continue;
         if (folderId && (w.folderId ?? null) !== folderId) continue;
         cards.push(toCard(d.id, w));
       }

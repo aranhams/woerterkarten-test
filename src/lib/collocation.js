@@ -109,6 +109,9 @@ export function fullPhrase(question, correctText, kasus = "none") {
   if (question?.partnerLabel === "Nomen") {
     return isAdj ? `${correctText} ist ${stem}` : `${correctText} ${stem}`;
   }
+  if (question?.partnerLabel === "Adjektiv") {
+    return `${stem} ${question?.linkVerb || "ist"} ${correctText}`;
+  }
   const nounPhrase = declineStem(question?.article, question?.de, kasus);
   return `${nounPhrase} ${correctText}`;
 }

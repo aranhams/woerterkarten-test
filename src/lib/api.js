@@ -83,6 +83,7 @@ async function pronounce(payload) {
 
 export const requestPronunciation = (wordId, scope) => pronounce({ action: "word", wordId, scope });
 export const resyncPronunciation = (wordIds) => pronounce({ action: "resync", wordIds });
+export const lookupGenus = (de) => pronounce({ action: "genus", de });
 
 export async function collocationSync(action, payload = {}) {
   const token = await idToken();
@@ -99,7 +100,7 @@ export async function collocationSync(action, payload = {}) {
 export const getWeakCollocations = (classId) => collocationSync("weak-collocations", { classId });
 export const bulkActivateCollocations = (wordIds) => collocationSync("bulk-opt-in-ids", { wordIds });
 export const bulkDeactivateCollocations = (wordIds) => collocationSync("bulk-opt-out-ids", { wordIds });
-export const addCollocationVariant = (baseWordId, partnerLabel) => collocationSync("add-variant", { baseWordId, partnerLabel });
+export const addCollocationVariant = (baseWordId, partnerLabel, autofill = false) => collocationSync("add-variant", { baseWordId, partnerLabel, autofill });
 export const removeCollocationVariant = (variantId) => collocationSync("remove-variant", { variantId });
 export const purgeCollocationSets = (wordId) => collocationSync("purge-sets", { wordId });
 
@@ -121,6 +122,22 @@ export async function getArticleQuiz({ folderId = null } = {}) {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ folderId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Fehler");
+  return data;
+}
+
+export const startRepeat = (classId, folderIds, duration) => classSync("start-repeat", { classId, folderIds, duration });
+export const stopRepeat = (classId) => classSync("stop-repeat", { classId });
+export const removeRepeat = (classId, repeatId) => classSync("remove-repeat", { classId, repeatId });
+
+export async function getRepeatQueue({ classId, repeatId = null }) {
+  const token = await idToken();
+  const res = await fetch("/api/repeat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ classId, repeatId }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Fehler");

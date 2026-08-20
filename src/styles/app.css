@@ -139,6 +139,16 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .switch.on{background:var(--sage);}
 .switch-knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:white;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2);}
 .switch.on .switch-knob{left:18px;}
+.artikel-toggle{display:inline-flex;align-items:center;gap:6px;padding:2px 4px;border:none;background:none;font-family:inherit;font-size:11px;font-weight:600;color:var(--ink-soft);cursor:pointer;flex-shrink:0;}
+.artikel-toggle .switch{width:32px;height:18px;}
+.artikel-toggle .switch-knob{width:14px;height:14px;}
+.artikel-toggle .switch.on .switch-knob{left:16px;}
+.transfer-item.member-row{cursor:default;}
+.transfer-item.member-row:hover{background:white;}
+.transfer-item .artikel-toggle{flex-shrink:0;}
+.ti-rm-btn{flex-shrink:0;border:none;background:none;color:var(--red-soft);font-size:15px;font-weight:700;line-height:1;cursor:pointer;padding:2px 4px;font-family:inherit;}
+.ti-rm-btn:hover{background:var(--red-pale);border-radius:6px;}
+.ti-rm-btn:disabled{opacity:.5;cursor:default;}
 .transfer{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;}
 .transfer-col{flex:1;min-width:200px;}
 .transfer-list{border:1.5px solid var(--ivory-dark);border-radius:10px;background:var(--ivory);max-height:240px;overflow-y:auto;padding:6px;}
@@ -237,3 +247,7 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .empty .emoji{font-size:44px;margin-bottom:14px;}
 .empty h3{font-size:18px;margin-bottom:6px;color:var(--ink);}
 .empty p{font-size:13px;color:var(--ink-soft);max-width:280px;margin:0 auto;}
+
+.repeat-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--accent-pale);border:1.5px solid var(--accent);border-radius:12px;padding:12px 16px;margin-bottom:16px;}
+.repeat-banner.active{background:var(--sage-pale);border-color:var(--sage);}
+.repeat-banner-txt{font-size:13px;color:var(--ink);flex:1;min-width:180px;}
