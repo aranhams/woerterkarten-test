@@ -249,6 +249,13 @@ export function CollocationsTeacherTab({ session }) {
     const r = await act("remove-option", { wordId: set.wordId, optionId }, "Entfernt", baseIdOf(set));
     if (r) applyResult(set.wordId, baseIdOf(set), r.set);
   }
+  async function clearOptions(set) {
+    const n = (set.options || []).length;
+    if (n === 0) return;
+    if (!confirm(`Alle ${n} Optionen dieses Worts wirklich löschen?`)) return;
+    const r = await act("clear-options", { wordId: set.wordId }, "Alle Optionen gelöscht", baseIdOf(set));
+    if (r) applyResult(set.wordId, baseIdOf(set), r.set);
+  }
   async function saveEdit(set) {
     const r = await act("edit-option", { wordId: set.wordId, optionId: edit.optionId, text: edit.text, kasus: edit.kasus }, "✓ Gespeichert", baseIdOf(set));
     if (r) { applyResult(set.wordId, baseIdOf(set), r.set); setEdit(null); }
@@ -510,6 +517,11 @@ export function CollocationsTeacherTab({ session }) {
         <button className="btn-sm" onClick={() => setManual(manualOpen ? null : { setId: set.wordId, text: "", correct: nCorrect === 0, kasus: "akk" })} disabled={rowBusy || options.length >= MAX_OPTIONS}>
           ＋ Option manuell
         </button>
+        {options.length > 0 && (
+          <button className="btn-sm danger" onClick={() => clearOptions(set)} disabled={rowBusy} title="Alle Optionen dieses Worts löschen">
+            🗑 Alle Optionen löschen
+          </button>
+        )}
         {allowDeactivate && <button className="btn-sm danger" onClick={() => optOut(w)} disabled={rowBusy} style={{ marginLeft: "auto" }}>Deaktivieren</button>}
       </div>
 

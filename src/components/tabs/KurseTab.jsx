@@ -48,7 +48,7 @@ export function KurseTab({ session }) {
     })();
   }, []);
 
-  useEffect(() => { setRepeatFolders(new Set()); setRepeatDuration("1"); }, [selectedId]);
+  useEffect(() => { setRepeatFolders(new Set()); setRepeatDuration("15"); }, [selectedId]);
 
   function flash(m) { setMsg(m); setTimeout(() => setMsg(""), 3000); }
 
@@ -122,9 +122,14 @@ export function KurseTab({ session }) {
     if (ms <= 0) return "abgelaufen";
     const days = Math.floor(ms / 86400000);
     const hours = Math.floor((ms % 86400000) / 3600000);
-    const when = new Date(expiresAt).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" });
-    if (days >= 1) return `noch ${days} ${days === 1 ? "Tag" : "Tage"} (${when})`;
-    return `noch ${Math.max(1, hours)} Std. (${when})`;
+    const mins = Math.floor((ms % 3600000) / 60000);
+    if (days >= 1) {
+      const when = new Date(expiresAt).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" });
+      return `noch ${days} ${days === 1 ? "Tag" : "Tage"} (${when})`;
+    }
+    const clock = new Date(expiresAt).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+    if (hours >= 1) return `noch ${hours} Std. ${mins} Min. (${clock} Uhr)`;
+    return `noch ${Math.max(1, mins)} Min. (${clock} Uhr)`;
   };
 
   async function createClass() {
@@ -210,8 +215,13 @@ export function KurseTab({ session }) {
   async function sync() {
     try { const r = await call("sync", {}); flash(`✓ Synchronisiert (${r.stamped} aktualisiert)`); } catch {}
   }
-  function onRepeatFolderSelect(e) {
-    setRepeatFolders(new Set([...e.target.selectedOptions].map((o) => o.value)));
+  function toggleRepeatFolder(id) {
+    setRepeatFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
   async function addRepeat() {
     if (!selected || repeatFolders.size === 0) return;
@@ -220,7 +230,7 @@ export function KurseTab({ session }) {
       const r = await startRepeat(selected.id, [...repeatFolders], duration);
       patchClass(selected.id, { repeats: r.repeats, repeat: null });
       setRepeatFolders(new Set());
-      setRepeatDuration("1");
+      setRepeatDuration("15");
       flash("✓ Wiederholung hinzugefügt");
     } catch (e) { flash("⚠ " + (e.message || "Fehler")); }
   }
@@ -412,20 +422,28 @@ export function KurseTab({ session }) {
           <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Weise dem Kurs zuerst einen Ordner zu (oben).</p>
         ) : (<>
           <div className="sec-label">Neue Wiederholung — Ordner auswählen ({repeatFolders.size})</div>
-          <select multiple value={[...repeatFolders]} onChange={onRepeatFolderSelect}
-            size={Math.min(assignedFolders.length, 6)}
-            style={{ width: "100%", padding: 6, border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit", marginBottom: 6 }}>
-            {assignedFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
-          </select>
+          <div className="repeat-folder-grid">
+            {assignedFolders.map((f) => {
+              const on = repeatFolders.has(f.id);
+              return (
+                <button type="button" key={f.id} className={`repeat-folder-opt${on ? " on" : ""}`}
+                  onClick={() => toggleRepeatFolder(f.id)} aria-pressed={on}>
+                  <span className="rfo-check">{on && "✓"}</span>
+                  <span className="rfo-icon">{f.icon}</span>
+                  <span className="rfo-name">{f.name}</span>
+                </button>
+              );
+            })}
+          </div>
           <p style={{ fontSize: 11, color: "var(--ink-soft)", marginBottom: 10 }}>
-            Mehrfachauswahl: Strg/Cmd oder Umschalt gedrückt halten.
+            Tippe die Ordner an, um sie aus- oder abzuwählen. Mehrere möglich.
           </p>
           <div className="form-row" style={{ flexWrap: "wrap" }}>
             <select value={repeatDuration} onChange={(e) => setRepeatDuration(e.target.value)} style={{ flex: "0 1 130px" }}>
-              <option value="1">1 Tag</option>
-              <option value="3">3 Tage</option>
-              <option value="7">7 Tage</option>
-              <option value="none">Unbegrenzt</option>
+              <option value="15">15 Minuten</option>
+              <option value="30">30 Minuten</option>
+              <option value="60">1 Stunde</option>
+              <option value="1440">1 Tag</option>
             </select>
             <button className="btn-add" onClick={addRepeat} disabled={busy || repeatFolders.size === 0}>
               Hinzufügen

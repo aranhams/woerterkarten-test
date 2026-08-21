@@ -37,7 +37,7 @@ const FOLDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 const TEACHER_ACTIONS = new Set([
   "opt-in", "opt-out", "bulk-opt-in-folder", "bulk-opt-in-ids", "bulk-opt-out-ids", "generate", "resync",
-  "set-category", "set-link-verb", "add-option", "edit-option", "toggle-correct", "remove-option", "weak-collocations",
+  "set-category", "set-link-verb", "add-option", "edit-option", "toggle-correct", "remove-option", "clear-options", "weak-collocations",
   "add-variant", "remove-variant", "purge-sets",
 ]);
 const ROSTER_CAP = 500;
@@ -563,6 +563,16 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
       if (next.length === options.length) throw new HttpError(404, "Option nicht gefunden");
       const prevAnswers = answerNormsOf(options);
       return persist(db, wordId, existing, { options: next, rev: bumpRev(existing.rev, prevAnswers, next) }, stamp, user.uid);
+    }
+
+    case "clear-options": {
+      const wordId = reqWordId(body.wordId);
+      const existing = await loadSet(db, wordId);
+      if (!existing) throw new HttpError(404, "Set nicht gefunden");
+      const options = Array.isArray(existing.options) ? existing.options : [];
+      if (options.length === 0) return persist(db, wordId, existing, { options: [] }, stamp, user.uid);
+      const prevAnswers = answerNormsOf(options);
+      return persist(db, wordId, existing, { options: [], rev: bumpRev(existing.rev, prevAnswers, []) }, stamp, user.uid);
     }
 
     case "add-variant": {

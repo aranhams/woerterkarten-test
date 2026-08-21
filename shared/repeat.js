@@ -1,13 +1,15 @@
 export const DAY_MS = 86_400_000;
+export const MIN_MS = 60_000;
 
-export const REPEAT_DURATIONS = [1, 3, 7, null];
+// Durations are expressed in minutes: 15 min, 30 min, 1 hour, 1 day (+ unlimited).
+export const REPEAT_DURATIONS = [15, 30, 60, 1440, null];
 
 export function isValidDuration(v) {
   return v === null || (Number.isInteger(v) && REPEAT_DURATIONS.includes(v));
 }
 
 export function computeExpiresAt(duration, startMs = Date.now()) {
-  return duration == null ? null : startMs + duration * DAY_MS;
+  return duration == null ? null : startMs + duration * MIN_MS;
 }
 
 export function repeatIsLive(r, now = Date.now()) {
