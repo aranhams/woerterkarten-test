@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, increment, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, documentId, getDocs, increment, serverTimestamp } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { lowerKey } from "../lib/word";
 import { listLiveRepeats } from "../../shared/repeat.js";
@@ -114,6 +114,24 @@ export const loadClassFolders = (uid) =>
 
 export async function loadVisibleFolders(session) {
   return session.isTeacher ? await loadGlobalFolders() : await loadClassFolders(session.uid);
+}
+
+const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
+
+export async function loadClassWords(cls, cap = 200) {
+  const folderIds = [...new Set((cls.folders || []).map((e) => e && e.folderId).filter(Boolean))];
+  const looseIds = [...new Set((cls.wordIds || []).filter(Boolean))];
+  const seen = new Map();
+  for (const slice of chunk(folderIds, 30)) {
+    const snap = await getDocs(query(collection(db, "global_words"), where("folderId", "in", slice)));
+    for (const d of snap.docs) seen.set(d.id, { id: d.id, source: "global", ...d.data() });
+  }
+  for (const slice of chunk(looseIds.filter((id) => !seen.has(id)), 30)) {
+    const snap = await getDocs(query(collection(db, "global_words"), where(documentId(), "in", slice)));
+    for (const d of snap.docs) seen.set(d.id, { id: d.id, source: "global", ...d.data() });
+  }
+  const rows = [...seen.values()].sort((a, b) => String(a.deL || a.de || "").localeCompare(String(b.deL || b.de || "")));
+  return { rows: rows.slice(0, cap), exhausted: rows.length <= cap };
 }
 
 export function cachePron(session, word, pron) {

@@ -7,9 +7,8 @@ import { translateWord, getLearnQueue } from "../../lib/api";
 import {
   loadVisibleFolders, loadUserWords, loadUserFolders,
   loadProgress, saveOneProgress, queueActivity, flushActivity, cachePron,
-  loadActiveRepeats,
+  loadActiveRepeats, loadAllClasses, loadClassWords,
 } from "../../data/loaders";
-import { newPageState, loadNextPage } from "../../data/pagination";
 import { usePronunciation } from "../../data/usePron";
 import { SpokenWord } from "../Pronunciation";
 import { RepeatSession } from "../RepeatSession";
@@ -24,6 +23,8 @@ export function LearnTab({ session }) {
   const [sourceFilter, setSourceFilter] = useState("all");
   const [allWords, setAllWords] = useState([]);
   const [folders, setFolders] = useState([]);
+  const [classes, setClasses] = useState([]);
+  const [filterClass, setFilterClass] = useState("");
   const [progress, setProgress] = useState({});
   const [stats, setStats] = useState(null);
   const [delta, setDelta] = useState({ due: 0, learned: 0 });
@@ -64,27 +65,20 @@ export function LearnTab({ session }) {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const [gf, uf, uw, prog] = await Promise.all([
+      const [gf, uf, uw, prog, cs] = await Promise.all([
         loadVisibleFolders(session),
         loadUserFolders(session.uid),
         session.isTeacher ? Promise.resolve([]) : loadUserWords(session.uid),
         session.isTeacher ? Promise.resolve({}) : loadProgress(session.uid),
+        session.isTeacher ? loadAllClasses() : Promise.resolve([]),
       ]);
       if (cancelled) return;
       const list = [...gf.map((f) => ({ ...f, source: "global" })), ...uf.map((f) => ({ ...f, source: "personal" }))];
       setFolders(list);
       setProgress(prog);
       if (session.isTeacher) {
-        const first = list[0];
-        if (first) {
-          const page = await fetchFolderCards(first.id);
-          if (cancelled) return;
-          setFilterFolder(first.id);
-          setAllWords(page.rows);
-          setCapped(!page.exhausted);
-        } else {
-          setAllWords([]);
-        }
+        setClasses(cs);
+        setAllWords([]);
         setLoading(false);
         return;
       }
@@ -102,16 +96,14 @@ export function LearnTab({ session }) {
     return () => { cancelled = true; };
   }, [session.uid, session.isTeacher]);
 
-  const fetchFolderCards = (fid) => loadNextPage(newPageState({
-    uid: session.uid, teacher: true, folderId: fid, pageSize: CARDS_CAP,
-  }));
-
-  async function loadTeacherFolder(fid) {
-    setFilterFolder(fid);
+  async function loadTeacherClass(cid) {
+    setFilterClass(cid);
+    setFilterFolder("");
     setIdx(0); setRevealed(false); setProgress({});
-    if (!fid) { setAllWords([]); return; }
+    const cls = classes.find((c) => c.id === cid);
+    if (!cls) { setAllWords([]); return; }
     setLoading(true);
-    const page = await fetchFolderCards(fid);
+    const page = await loadClassWords(cls, CARDS_CAP);
     setAllWords(page.rows);
     setCapped(!page.exhausted);
     setLoading(false);
@@ -150,9 +142,14 @@ export function LearnTab({ session }) {
 
   const allFolders = filterFolder === "all" || filterFolder === "";
   const matchSource = (w) => sourceFilter === "all" || (sourceFilter === "global" ? w.source === "global" : w.source !== "global");
-  const scoped = (allFolders || session.isTeacher
+  const scoped = (allFolders
     ? allWords
     : allWords.filter((w) => w.folderId === filterFolder)).filter(matchSource);
+
+  const selectedClass = session.isTeacher ? classes.find((c) => c.id === filterClass) : null;
+  const classFolders = selectedClass
+    ? folders.filter((f) => (selectedClass.folders || []).some((e) => e && e.folderId === f.id))
+    : [];
 
   const progressOf = (w) => (session.isTeacher ? TEACHER_PREVIEW : effProgress(w, progress[w.id]));
   const dueCards = scoped.filter((w) => isDue(progressOf(w)));
@@ -253,12 +250,12 @@ export function LearnTab({ session }) {
 
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
-  if (session.isTeacher && !filterFolder) {
+  if (session.isTeacher && classes.length === 0) {
     return (
       <div className="empty">
-        <div className="emoji">📂</div>
-        <h3>Noch keine Ordner</h3>
-        <p style={{ fontSize: 14 }}>Erstelle im Tab „Verwalten" einen Ordner mit Wörtern.</p>
+        <div className="emoji">👥</div>
+        <h3>Noch keine Kurse</h3>
+        <p style={{ fontSize: 14 }}>Erstelle im Tab „Kurse" einen Kurs und weise ihm Ordner oder Wörter zu.</p>
       </div>
     );
   }
@@ -280,23 +277,40 @@ export function LearnTab({ session }) {
       <div className="prog-bar"><div className="prog-fill" style={{ width: `${Math.round(learned / total * 100)}%` }} /></div>
       <div className="prog-text">{Math.round(learned / total * 100)}% gemeistert</div>
     </div>}
-    {folders.length > 0 && <div className="filter-bar">
-      <select value={filterFolder} onChange={(e) => (session.isTeacher ? loadTeacherFolder(e.target.value) : switchStudentFolder(e.target.value))}>
-        {!session.isTeacher && <option value="all">📂 Alle Ordner</option>}
+    {session.isTeacher ? (<div className="filter-bar">
+      <select value={filterClass} onChange={(e) => loadTeacherClass(e.target.value)}>
+        <option value="">👥 Kurs wählen…</option>
+        {classes.map((c) => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+      </select>
+      {filterClass && classFolders.length > 0 && (
+        <select value={filterFolder} onChange={(e) => { setFilterFolder(e.target.value); setIdx(0); setRevealed(false); }}>
+          <option value="">📂 Alle Ordner</option>
+          {classFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+        </select>
+      )}
+    </div>) : (folders.length > 0 && <div className="filter-bar">
+      <select value={filterFolder} onChange={(e) => switchStudentFolder(e.target.value)}>
+        <option value="all">📂 Alle Ordner</option>
         {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
       </select>
-      {!session.isTeacher && <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setIdx(0); setRevealed(false); }}>
+      <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setIdx(0); setRevealed(false); }}>
         <option value="all">Alle Wörter</option>
         <option value="personal">Meine Wörter</option>
         <option value="global">Kurswörter</option>
-      </select>}
-    </div>}
+      </select>
+    </div>)}
     {total > 0 && <div className="dir-toggle">
       <button className={`dir-btn${direction === "de2ru" ? " active" : ""}`} onClick={() => setDir("de2ru")}>Deutsch</button>
       <span style={{ color: "var(--sage-light)", padding: "0 2px" }}>⇄</span>
       <button className={`dir-btn${direction === "ru2de" ? " active" : ""}`} onClick={() => setDir("ru2de")}>{langLabel}</button>
     </div>}
-    {!card ? (
+    {session.isTeacher && !filterClass ? (
+      <div className="empty">
+        <div className="emoji">👥</div>
+        <h3>Kurs wählen</h3>
+        <p style={{ fontSize: 14 }}>Wähle oben einen Kurs, um seine Wörter anzusehen.</p>
+      </div>
+    ) : !card ? (
       <div className="empty">
         <div className="emoji">{total === 0 ? "📭" : "🎉"}</div>
         <h3>{total === 0 ? "Noch keine Wörter" : "Alle Karten gelernt!"}</h3>
