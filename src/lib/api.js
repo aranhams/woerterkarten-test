@@ -104,24 +104,24 @@ export const addCollocationVariant = (baseWordId, partnerLabel, autofill = false
 export const removeCollocationVariant = (variantId) => collocationSync("remove-variant", { variantId });
 export const purgeCollocationSets = (wordId) => collocationSync("purge-sets", { wordId });
 
-export async function getCollocationPractice({ folderId = null } = {}) {
+export async function getCollocationPractice({ folderId = null, classId = null } = {}) {
   const token = await idToken();
   const res = await fetch("/api/collocations", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ action: "practice-set", folderId }),
+    body: JSON.stringify({ action: "practice-set", folderId, classId }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Fehler");
   return data;
 }
 
-export async function getArticleQuiz({ folderId = null } = {}) {
+export async function getArticleQuiz({ folderId = null, classId = null } = {}) {
   const token = await idToken();
   const res = await fetch("/api/article", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ folderId }),
+    body: JSON.stringify({ folderId, classId }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Fehler");

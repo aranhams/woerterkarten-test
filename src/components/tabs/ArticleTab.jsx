@@ -3,7 +3,7 @@ import { getArticleQuiz, translateWord } from "../../lib/api";
 import { withTrans } from "../../lib/word";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
 import { LIMIT } from "../../lib/constants";
-import { loadVisibleFolders } from "../../data/loaders";
+import { loadVisibleFolders, loadAllClasses } from "../../data/loaders";
 import { loadArticleProgress, saveOneArticleProgress } from "../../data/articleProgress";
 import {
   buildArticleCards, buildArticleDeck, selectDueArticles, answerArticle, ARTICLE_OPTIONS,
@@ -15,6 +15,8 @@ export function ArticleTab({ session }) {
   const [cards, setCards] = useState([]);
   const [progress, setProgress] = useState({});
   const [folders, setFolders] = useState([]);
+  const [classes, setClasses] = useState([]);
+  const [filterClass, setFilterClass] = useState("");
   const [filterFolder, setFilterFolder] = useState(isTeacher ? "" : "all");
   const [deck, setDeck] = useState([]);
   const [idx, setIdx] = useState(0);
@@ -26,21 +28,24 @@ export function ArticleTab({ session }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  async function load(folderId) {
+  function prepDeck(built, prog) {
+    setCards(built);
+    setProgress(prog);
+    setDeck(buildArticleDeck(isTeacher ? built.map((c) => ({ ...c, deRev: -1 })) : built, prog));
+    setIdx(0);
+    setPicked(null);
+    setRound({ answered: 0, correct: 0 });
+  }
+
+  async function load({ folderId = null, classId = null } = {}) {
     setLoading(true);
     setError("");
     try {
       const [r, prog] = await Promise.all([
-        getArticleQuiz({ folderId: folderId === "all" ? null : folderId }),
+        getArticleQuiz({ folderId: folderId === "all" ? null : folderId, classId }),
         isTeacher ? Promise.resolve({}) : loadArticleProgress(session.uid),
       ]);
-      const built = buildArticleCards(r.cards || []);
-      setCards(built);
-      setProgress(prog);
-      setDeck(buildArticleDeck(isTeacher ? built.map((c) => ({ ...c, deRev: -1 })) : built, prog));
-      setIdx(0);
-      setPicked(null);
-      setRound({ answered: 0, correct: 0 });
+      prepDeck(buildArticleCards(r.cards || []), prog);
     } catch (e) {
       setError(e.message || "Fehler");
       setCards([]);
@@ -52,29 +57,51 @@ export function ArticleTab({ session }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const gf = await loadVisibleFolders(session);
+      const [gf, cs] = await Promise.all([
+        loadVisibleFolders(session),
+        isTeacher ? loadAllClasses() : Promise.resolve([]),
+      ]);
       const list = gf.map((f) => ({ ...f, source: "global" }));
       if (cancelled) return;
       setFolders(list);
       if (isTeacher) {
-        const first = list[0];
-        if (first) {
-          setFilterFolder(first.id);
-          await load(first.id);
-        } else {
-          setLoading(false);
-        }
+        setClasses(cs);
+        setLoading(false);
         return;
       }
-      await load("all");
+      await load({ folderId: "all" });
     })();
     return () => { cancelled = true; };
   }, [session.uid]);
 
   async function onFolderChange(v) {
     setFilterFolder(v);
-    await load(v);
+    await load({ folderId: v });
   }
+
+  async function onClassChange(v) {
+    setFilterClass(v);
+    setFilterFolder("");
+    if (!v) { setCards([]); setDeck([]); return; }
+    await load({ classId: v });
+  }
+
+  function onTeacherFolderChange(v) {
+    setFilterFolder(v);
+    const subset = v ? cards.filter((c) => (c.folderId ?? null) === v) : cards;
+    setDeck(buildArticleDeck(subset.map((c) => ({ ...c, deRev: -1 })), {}));
+    setIdx(0);
+    setPicked(null);
+    setRound({ answered: 0, correct: 0 });
+  }
+
+  const selectedClass = isTeacher ? classes.find((c) => c.id === filterClass) : null;
+  const classFolders = selectedClass
+    ? folders.filter((f) => (selectedClass.folders || []).some((e) => e && e.folderId === f.id))
+    : [];
+  const scopedCards = isTeacher && filterFolder
+    ? cards.filter((c) => (c.folderId ?? null) === filterFolder)
+    : cards;
 
   const current = deck[idx] || null;
   const answered = picked !== null;
@@ -94,7 +121,7 @@ export function ArticleTab({ session }) {
   }
 
   const stats = selectDueArticles(
-    isTeacher ? cards.map((c) => ({ ...c, deRev: -1 })) : cards,
+    isTeacher ? scopedCards.map((c) => ({ ...c, deRev: -1 })) : cards,
     isTeacher ? {} : progress,
   );
   const learned = isTeacher ? 0 : stats.learned;
@@ -117,7 +144,7 @@ export function ArticleTab({ session }) {
   }
 
   function restart() {
-    setDeck(buildArticleDeck(isTeacher ? cards.map((c) => ({ ...c, deRev: -1 })) : cards, isTeacher ? {} : progress));
+    setDeck(buildArticleDeck(isTeacher ? scopedCards.map((c) => ({ ...c, deRev: -1 })) : cards, isTeacher ? {} : progress));
     setIdx(0);
     setPicked(null);
     setShowTrans(false);
@@ -126,17 +153,17 @@ export function ArticleTab({ session }) {
 
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
-  if (isTeacher && !filterFolder) {
+  if (isTeacher && classes.length === 0) {
     return (
       <div className="empty" style={{ padding: 40 }}>
-        <div className="emoji">📂</div>
-        <h3>Noch keine Ordner</h3>
-        <p style={{ fontSize: 14 }}>Erstelle im Tab „Verwalten" einen Ordner mit Wörtern.</p>
+        <div className="emoji">👥</div>
+        <h3>Noch keine Kurse</h3>
+        <p style={{ fontSize: 14 }}>Erstelle im Tab „Kurse" einen Kurs und weise ihm Ordner oder Wörter zu.</p>
       </div>
     );
   }
 
-  const total = cards.length;
+  const total = isTeacher ? scopedCards.length : cards.length;
   const done = idx >= deck.length;
 
   return (<>
@@ -148,10 +175,23 @@ export function ArticleTab({ session }) {
       <div className="stat"><div className="stat-n ok">{learned}</div><div className="stat-l">Gemeistert</div></div>
     </div>
 
-    {folders.length > 0 && (
+    {isTeacher ? (
+      <div className="filter-bar">
+        <select value={filterClass} onChange={(e) => onClassChange(e.target.value)}>
+          <option value="">👥 Kurs wählen…</option>
+          {classes.map((c) => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+        </select>
+        {filterClass && classFolders.length > 0 && (
+          <select value={filterFolder} onChange={(e) => onTeacherFolderChange(e.target.value)}>
+            <option value="">📂 Alle Ordner</option>
+            {classFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+          </select>
+        )}
+      </div>
+    ) : folders.length > 0 && (
       <div className="filter-bar">
         <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)}>
-          {!isTeacher && <option value="all">📂 Alle Ordner</option>}
+          <option value="all">📂 Alle Ordner</option>
           {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
         </select>
       </div>
@@ -163,13 +203,19 @@ export function ArticleTab({ session }) {
       </p>
     )}
 
-    {total === 0 ? (
+    {isTeacher && !filterClass ? (
+      <div className="empty" style={{ padding: 40 }}>
+        <div className="emoji">👥</div>
+        <h3>Kurs wählen</h3>
+        <p style={{ fontSize: 14 }}>Wähle oben einen Kurs, um die Artikel seiner Nomen zu üben.</p>
+      </div>
+    ) : total === 0 ? (
       <div className="empty" style={{ padding: 40 }}>
         <div className="emoji">🔤</div>
         <h3>Noch keine Nomen</h3>
         <p style={{ fontSize: 14 }}>
           {isTeacher
-            ? "In diesem Ordner gibt es noch keine Nomen mit erkanntem Artikel."
+            ? "In diesem Kurs gibt es noch keine Nomen mit erkanntem Artikel."
             : "Sobald deine Lehrkraft dir Nomen zuweist, kannst du hier die Artikel üben."}
         </p>
       </div>

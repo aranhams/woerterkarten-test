@@ -34,6 +34,7 @@ const GETALL_CHUNK = 150;
 const WORD_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const OPT_ID = /^o_[A-Za-z0-9_]{1,40}$/;
 const FOLDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const CLASS_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 const TEACHER_ACTIONS = new Set([
   "opt-in", "opt-out", "bulk-opt-in-folder", "bulk-opt-in-ids", "bulk-opt-out-ids", "generate", "resync",
@@ -63,6 +64,11 @@ function reqOptId(v) {
 function reqFolderId(v) {
   const id = String(v || "").trim();
   if (!FOLDER_ID.test(id)) throw new HttpError(400, "folderId ungültig");
+  return id;
+}
+function reqClassId(v) {
+  const id = String(v || "").trim();
+  if (!CLASS_ID.test(id)) throw new HttpError(400, "classId ungültig");
   return id;
 }
 
@@ -265,11 +271,51 @@ async function classWordIds(db, cls) {
   return [...ids];
 }
 
+// Teacher preview for a whole class: every opted-in word in the class's folders or
+// loose word list, each tagged with its folderId so the client can filter by folder.
+async function teacherClassManifest(db, cls) {
+  const folderIds = [...new Set((cls.folders || []).map((e) => e && e.folderId).filter(Boolean))];
+  const looseIds = [...new Set((cls.wordIds || []).map(String).filter(Boolean))];
+  const folderOf = new Map();
+  for (let i = 0; i < folderIds.length; i += 30) {
+    const slice = folderIds.slice(i, i + 30);
+    if (!slice.length) continue;
+    const snap = await db.collection("global_words").where("folderId", "in", slice).get();
+    for (const d of snap.docs) folderOf.set(d.id, d.data().folderId ?? null);
+  }
+  for (let i = 0; i < looseIds.length; i += GETALL_CHUNK) {
+    const slice = looseIds.filter((id) => !folderOf.has(id)).slice(i, i + GETALL_CHUNK);
+    if (!slice.length) continue;
+    const snaps = await db.getAll(...slice.map((id) => db.doc(`global_words/${id}`)));
+    for (const s of snaps) if (s.exists) folderOf.set(s.id, s.data().folderId ?? null);
+  }
+  const ids = [...folderOf.keys()];
+  const out = [];
+  for (let i = 0; i < ids.length; i += GETALL_CHUNK) {
+    const slice = ids.slice(i, i + GETALL_CHUNK);
+    const snaps = slice.length ? await db.getAll(...slice.map((id) => setRef(db, id))) : [];
+    for (let j = 0; j < slice.length; j++) {
+      const s = snaps[j];
+      if (s.exists && s.data().optedIn !== false) out.push({ id: slice[j], folderId: folderOf.get(slice[j]) ?? null });
+    }
+  }
+  return out;
+}
+
 async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
   switch (action) {
     case "practice-set": {
       const folderId = body.folderId ? reqFolderId(body.folderId) : null;
-      const manifest = isTeacher ? await teacherManifest(db, folderId) : await collocationManifest(db, user.uid);
+      const classId = body.classId ? reqClassId(body.classId) : null;
+      let manifest;
+      if (isTeacher && classId) {
+        const clsSnap = await db.doc(`classes/${classId}`).get();
+        manifest = clsSnap.exists ? await teacherClassManifest(db, clsSnap.data()) : [];
+      } else if (isTeacher) {
+        manifest = await teacherManifest(db, folderId);
+      } else {
+        manifest = await collocationManifest(db, user.uid);
+      }
       const scoped = (folderId && !isTeacher ? manifest.filter((e) => e.folderId === folderId) : manifest).slice(0, PRACTICE_CAP);
       const folderOf = new Map(scoped.map((e) => [e.id, e.folderId]));
       const ids = [...folderOf.keys()];
@@ -311,7 +357,7 @@ async function dispatch({ db, user, action, body, ctx, stamp, isTeacher }) {
         }
       }
 
-      ctx.L.log("info", "colloc.practice_set", { uid: user.uid, teacher: isTeacher, manifest: manifest.length, served: questions.length, variants: variantCount, folderId });
+      ctx.L.log("info", "colloc.practice_set", { uid: user.uid, teacher: isTeacher, manifest: manifest.length, served: questions.length, variants: variantCount, folderId, classId });
       return { questions };
     }
 
