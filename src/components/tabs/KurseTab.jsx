@@ -23,7 +23,6 @@ export function KurseTab({ session }) {
   const [renameVal, setRenameVal] = useState("");
   const [copyMsg, setCopyMsg] = useState("");
   const [roster, setRoster] = useState([]);
-  const [articleFullSet, setArticleFullSet] = useState(() => new Set());
   const [studentSearch, setStudentSearch] = useState("");
   const [classSearch, setClassSearch] = useState("");
   const [repeatFolders, setRepeatFolders] = useState(() => new Set());
@@ -42,7 +41,6 @@ export function KurseTab({ session }) {
       try {
         const r = await classSync("list-students");
         setRoster(r.students || []);
-        setArticleFullSet(new Set((r.students || []).filter((s) => s.articleFull).map((s) => s.uid)));
       } catch {}
       setLoading(false);
     })();
@@ -54,15 +52,6 @@ export function KurseTab({ session }) {
 
   function patchClass(id, patch) {
     setClasses((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  }
-
-  async function toggleArticleFull(uid, full) {
-    setArticleFullSet((prev) => { const n = new Set(prev); if (full) n.add(uid); else n.delete(uid); return n; });
-    try {
-      await call("set-article-full", { uid, full });
-    } catch {
-      setArticleFullSet((prev) => { const n = new Set(prev); if (full) n.delete(uid); else n.add(uid); return n; });
-    }
   }
 
   async function call(action, payload) {
@@ -329,27 +318,12 @@ export function KurseTab({ session }) {
             <div className="sec-label">Im Kurs ({members.length})</div>
             <div className="transfer-list">
               {members.length === 0 && <div className="transfer-empty">Noch keine Schüler.</div>}
-              {members.map((uid) => {
-                const full = articleFullSet.has(uid);
-                return (
-                  <div key={uid} className="transfer-item member-row">
-                    <span className="ti-name">{nameOf(uid)}</span>
-                    <button
-                      type="button"
-                      className="artikel-toggle"
-                      onClick={() => toggleArticleFull(uid, !full)}
-                      disabled={busy}
-                      title={full
-                        ? "Volles Artikeltraining: übt alle zugewiesenen Nomen, auch die im Kurs ausgeschalteten (für Neulinge). Tippen für normal."
-                        : "Normales Artikeltraining: folgt den Artikel-Schaltern der Kurswörter. Tippen für voll (Neuling)."}
-                    >
-                      <span className="artikel-toggle-label">Artikel: {full ? "voll" : "normal"}</span>
-                      <span className={`switch${full ? " on" : ""}`}><span className="switch-knob" /></span>
-                    </button>
-                    <button className="ti-rm-btn" onClick={() => removeStudent(uid)} disabled={busy} title="Aus dem Kurs entfernen">✕</button>
-                  </div>
-                );
-              })}
+              {members.map((uid) => (
+                <div key={uid} className="transfer-item member-row">
+                  <span className="ti-name">{nameOf(uid)}</span>
+                  <button className="ti-rm-btn" onClick={() => removeStudent(uid)} disabled={busy} title="Aus dem Kurs entfernen">✕</button>
+                </div>
+              ))}
             </div>
           </div>
         </div>

@@ -20,6 +20,10 @@ export function resolveArticleAnswer(word) {
   return null;
 }
 
+export function isArticleWord(word) {
+  return resolveArticleAnswer(word) != null;
+}
+
 export function buildArticleCards(words) {
   const out = [];
   for (const w of words || []) {

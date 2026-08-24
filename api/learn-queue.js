@@ -9,7 +9,7 @@ const DAY_MS = 86_400_000;
 
 async function buildManifest(db, uid) {
   const snap = await db.collection("global_words").where("memberUids", "array-contains", uid).get();
-  const words = snap.docs.map((d) => ({ i: d.id, f: d.data().folderId ?? null, r: d.data().deRev || 0 }));
+  const words = snap.docs.map((d) => ({ i: d.id, f: d.data().folderId ?? null, r: d.data().deRev || 0, c: d.data().cardOff === true ? 1 : 0 }));
   await db.doc(`users/${uid}/meta/assigned`).set(
     { v: 1, gen: 1, updatedAt: FieldValue.serverTimestamp(), words },
     { merge: true },

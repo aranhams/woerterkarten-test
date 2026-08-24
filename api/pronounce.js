@@ -133,9 +133,9 @@ export default async function handler(req, res) {
         L.done("warn", "pron.genus_bad", 400, { uid: user.uid });
         return res.status(400).json({ error: "Wort fehlt" });
       }
-      const { genus } = await lookupGenus(db, de, L);
-      L.done("info", "pron.genus", 200, { uid: user.uid, genus });
-      return res.status(200).json({ ok: true, genus });
+      const { genus, isNoun } = await lookupGenus(db, de, L);
+      L.done("info", "pron.genus", 200, { uid: user.uid, genus, isNoun });
+      return res.status(200).json({ ok: true, genus, isNoun });
     }
 
     if (action === "resync") {

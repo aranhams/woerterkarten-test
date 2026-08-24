@@ -107,6 +107,7 @@ export function selectDueQueue(manifest, progressData, {
 
   for (const e of (manifest || [])) {
     if (!e || !e.i) continue;
+    if (e.c) continue;
     total++;
     const key = e.f == null ? "_none" : e.f;
     const bucket = perFolder[key] || (perFolder[key] = { total: 0, due: 0, learned: 0 });

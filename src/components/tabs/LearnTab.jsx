@@ -3,6 +3,7 @@ import { LIMIT, LANGUAGES, CARDS_CAP } from "../../lib/constants";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
 import { isDue, nextReview, lvlEmoji, effProgress, MASTERY_LEVEL, INTERVALS } from "../../lib/srs";
 import { withTrans } from "../../lib/word";
+import { isArticleWord } from "../../lib/article";
 import { translateWord, getLearnQueue } from "../../lib/api";
 import {
   loadVisibleFolders, loadUserWords, loadUserFolders,
@@ -104,7 +105,7 @@ export function LearnTab({ session }) {
     if (!cls) { setAllWords([]); return; }
     setLoading(true);
     const page = await loadClassWords(cls, CARDS_CAP);
-    setAllWords(page.rows);
+    setAllWords(page.rows.filter((w) => w.cardOff !== true));
     setCapped(!page.exhausted);
     setLoading(false);
   }
@@ -141,7 +142,12 @@ export function LearnTab({ session }) {
   const setDir = (d) => { setDirection(d); localStorage.setItem("dw_dir", d); setRevealed(false); setIdx(0); };
 
   const allFolders = filterFolder === "all" || filterFolder === "";
-  const matchSource = (w) => sourceFilter === "all" || (sourceFilter === "global" ? w.source === "global" : w.source !== "global");
+  const matchSource = (w) => {
+    if (sourceFilter === "global") return w.source === "global";
+    if (sourceFilter === "personal") return w.source !== "global";
+    if (sourceFilter === "article") return w.source === "global" && isArticleWord(w);
+    return true;
+  };
   const scoped = (allFolders
     ? allWords
     : allWords.filter((w) => w.folderId === filterFolder)).filter(matchSource);
@@ -155,10 +161,10 @@ export function LearnTab({ session }) {
   const dueCards = scoped.filter((w) => isDue(progressOf(w)));
   const isLearned = (w) => (progressOf(w)?.level || 0) >= MASTERY_LEVEL;
 
-  const gStats = stats && sourceFilter !== "personal"
+  const gStats = stats && sourceFilter !== "personal" && sourceFilter !== "article"
     ? (allFolders ? stats : (stats.perFolder && stats.perFolder[filterFolder]) || { total: 0, due: 0, learned: 0 })
     : null;
-  const personal = sourceFilter === "global"
+  const personal = sourceFilter === "global" || sourceFilter === "article"
     ? []
     : allWords.filter((w) => w.source !== "global" && (allFolders || w.folderId === filterFolder));
 
@@ -297,6 +303,7 @@ export function LearnTab({ session }) {
         <option value="all">Alle Wörter</option>
         <option value="personal">Meine Wörter</option>
         <option value="global">Kurswörter</option>
+        <option value="article">🔤 Artikel-Wörter</option>
       </select>
     </div>)}
     {total > 0 && <div className="dir-toggle">

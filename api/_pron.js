@@ -342,18 +342,22 @@ function toPronMap(entry) {
 
 export async function lookupGenus(db, de, L) {
   const word = nfc(de);
-  if (!word || !isLookupable(word)) return { genus: null };
+  if (!word || !isLookupable(word)) return { genus: null, isNoun: null };
   const snap = await db.doc(`pron_lex/${pronKey(word)}`).get().catch(() => null);
   const cached = snap && snap.exists ? snap.data() : null;
-  if (cached && cached.gc) return { genus: cached.genus ?? null };
+  // Cache holds genus + gc but not nounhood. A stored genus proves it's a noun;
+  // a null genus is ambiguous (ambiguous-noun vs non-noun) so isNoun stays null
+  // (unknown) rather than fetching again — callers treat only isNoun===false as
+  // a signal, so a cache miss never produces a false "not a noun" warning.
+  if (cached && cached.gc) return { genus: cached.genus ?? null, isNoun: cached.genus != null ? true : null };
   const fetched = await fetchWiktionaryWikitext(word).catch(() => ({ status: "error" }));
   if (fetched.status !== "ok") {
     L.log("info", "pron.genus_miss", { reason: fetched.status });
-    return { genus: null };
+    return { genus: null, isNoun: null };
   }
   const section = germanSection(fetched.wikitext);
-  const g = section ? extractGenus(section) : { genus: null };
-  return { genus: g.genus ?? null };
+  const g = section ? extractGenus(section) : { genus: null, isNoun: false };
+  return { genus: g.genus ?? null, isNoun: g.isNoun };
 }
 
 export async function ensurePron(db, de, L) {

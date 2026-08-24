@@ -133,13 +133,13 @@ function applyDiffs(db, diffs) {
     for (const id of diff.removed) if (byId.delete(id)) changed = true;
     for (const [id, entry] of diff.added) {
       const prev = byId.get(id);
-      if (!prev || prev.f !== entry.f || prev.r !== entry.r) { byId.set(id, entry); changed = true; }
+      if (!prev || prev.f !== entry.f || prev.r !== entry.r || prev.c !== entry.c) { byId.set(id, entry); changed = true; }
     }
     return changed ? [...byId.values()] : null;
   });
 }
 
-const entryFor = (id, w) => ({ i: id, f: w.folderId ?? null, r: w.deRev || 0 });
+const entryFor = (id, w) => ({ i: id, f: w.folderId ?? null, r: w.deRev || 0, c: w.cardOff === true ? 1 : 0 });
 
 export async function syncWordManifests(db, wordIds, prevMemberUids = []) {
   const ids = [...new Set(wordIds || [])].filter(Boolean);

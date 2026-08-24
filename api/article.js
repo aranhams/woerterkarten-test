@@ -102,15 +102,10 @@ export default async function handler(req, res) {
         }
       }
     } else {
-      const [snap, cfg] = await Promise.all([
-        db.collection("global_words").where("memberUids", "array-contains", user.uid).limit(CARDS_CAP).get(),
-        db.doc("article_config/settings").get(),
-      ]);
-      const fullUids = Array.isArray(cfg.data()?.fullUids) ? cfg.data().fullUids : [];
-      const fullDrill = fullUids.includes(user.uid);
+      const snap = await db.collection("global_words").where("memberUids", "array-contains", user.uid).limit(CARDS_CAP).get();
       for (const d of snap.docs) {
         const w = d.data();
-        if (w.artOff === true && !fullDrill) continue;
+        if (w.artOff === true) continue;
         if (folderId && (w.folderId ?? null) !== folderId) continue;
         cards.push(toCard(d.id, w));
       }

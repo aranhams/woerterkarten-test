@@ -14,7 +14,6 @@ const PRIVATE_CAP = 500;
 const CHUNK = 30;
 const REPORT_TTL_MS = 120_000;
 const ROSTER_TTL_MS = 300_000;
-const ARTICLE_CFG = "article_config/settings";
 
 const reportCache = new Map();
 let rosterCache = null;
@@ -60,7 +59,6 @@ const TEACHER_ACTIONS = new Set([
   "sync", "cleanup", "word-updated", "word-assigned",
   "progress-report", "student-progress-detail",
   "start-repeat", "stop-repeat", "remove-repeat",
-  "set-article-full",
 ]);
 const ADMIN_ACTIONS = new Set(["reset-student-password"]);
 const ALL_ACTIONS = new Set([...TEACHER_ACTIONS, "join"]);
@@ -433,6 +431,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
         const actData = (actSnap && actSnap.exists) ? actSnap.data() : null;
         const activityDays = actData?.days || {};
         const assigned = assignedByUid.get(uid) || [];
+        const cardAssigned = assigned.filter((w) => w.cardOff !== true);
         const act = summarizeActivity(activityDays, now);
         const trend = summarizeTrend(actData?.weeks || {});
         for (const [key, v] of Object.entries(activityDays)) {
@@ -468,7 +467,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
         }
 
         rows.push({
-          uid, username, ...summarizeStudent(assigned, progressData, now),
+          uid, username, ...summarizeStudent(cardAssigned, progressData, now),
           streak: act.current, reviews30: act.reviews, correct30: act.correct,
           trendDelta: trend.delta, trendSamples: trend.samples,
           collocTotal, collocHard, collocMastered, collocHardWords,
@@ -477,7 +476,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
 
         for (const [wordId, p] of Object.entries(progressData)) {
           const w = wordById.get(wordId);
-          if (!w || !p) continue;
+          if (!w || !p || w.cardOff === true) continue;
           const rec = stuckByWord.get(wordId) || { stuck: 0, started: 0 };
           rec.started++;
           if (isHardFor(w, p)) rec.stuck++;
@@ -497,7 +496,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
         }
 
         const perFolder = new Map();
-        for (const w of assigned) {
+        for (const w of cardAssigned) {
           const p = progressData[w.id];
           if (w.folderId != null) {
             const rec = perFolder.get(w.folderId) || { assigned: 0, sicher: 0 };
@@ -564,7 +563,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
       if (!(Array.isArray(data.memberUids) && data.memberUids.includes(uid))) throw new HttpError(403, "Nicht im Kurs");
 
       const corpus = await loadClassCorpus(db, data);
-      const assigned = corpus.words.filter((w) => Array.isArray(w.memberUids) && w.memberUids.includes(uid));
+      const assigned = corpus.words.filter((w) => Array.isArray(w.memberUids) && w.memberUids.includes(uid) && w.cardOff !== true);
       const folders = Object.fromEntries([...corpus.folderMeta].map(([fid, f]) => [fid, { name: f.name || "Ordner", icon: f.icon || "📁" }]));
       const [snap, actSnap, privWordsSnap, privFoldersSnap] = await Promise.all([
         db.doc(`users/${uid}/meta/progress`).get(),
@@ -646,18 +645,6 @@ async function dispatch({ db, auth, user, action, body, L }) {
       return {};
     }
 
-    case "set-article-full": {
-      const uid = String(body.uid || "");
-      if (!/^[A-Za-z0-9_-]{1,128}$/.test(uid)) throw new HttpError(400, "uid ungültig");
-      const full = body.full === true;
-      await db.doc(ARTICLE_CFG).set(
-        { fullUids: full ? FieldValue.arrayUnion(uid) : FieldValue.arrayRemove(uid) },
-        { merge: true },
-      );
-      rosterCache = null;
-      return { uid, full };
-    }
-
     default:
       throw new HttpError(400, "Unknown action");
   }
@@ -674,15 +661,11 @@ async function listAllStudents(db, auth) {
     pageToken = res.pageToken;
   } while (pageToken);
 
-  const [snap, cfg] = await Promise.all([
-    db.collection("users").get(),
-    db.doc(ARTICLE_CFG).get(),
-  ]);
-  const fullUids = new Set(Array.isArray(cfg.data()?.fullUids) ? cfg.data().fullUids : []);
+  const snap = await db.collection("users").get();
   const students = [];
   for (const d of snap.docs) {
     if (teacherUids.has(d.id)) continue;
-    students.push({ uid: d.id, username: d.data().username || d.id.slice(0, 6), articleFull: fullUids.has(d.id) });
+    students.push({ uid: d.id, username: d.data().username || d.id.slice(0, 6) });
   }
   students.sort((a, b) => a.username.localeCompare(b.username));
   return students;

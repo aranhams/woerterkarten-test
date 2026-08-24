@@ -4,6 +4,7 @@ import { LIMIT, WORD_PAGE_SERVER, PRIVATE_WORD_LIMIT } from "../../lib/constants
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields, withTrans } from "../../lib/word";
 import { effProgress, lvlEmoji, MASTERY_LEVEL } from "../../lib/srs";
+import { isArticleWord } from "../../lib/article";
 import { translateWord, requestPronunciation, lookupGenus } from "../../lib/api";
 import {
   loadVisibleFolders, loadUserFolders, loadUserWords, loadProgress, cachePron,
@@ -133,6 +134,7 @@ export function WordsTab({ session }) {
     let sources;
     if (legacyPersonal) sources = ["global"];
     else if (src === "all") sources = ["global", "personal"];
+    else if (src === "article") sources = ["global"];
     else sources = [src];
     return newPageState({
       uid: session.uid,
@@ -431,9 +433,12 @@ export function WordsTab({ session }) {
     return mf && ms && msrc;
   });
   const visible = [...windowRows(page, pageIdx, WORD_PAGE_SERVER), ...legacyRows]
-    .filter((w) => sourceFilter === "all" || w.source === sourceFilter)
+    .filter((w) => {
+      if (sourceFilter === "article") return w.source === "global" && isArticleWord(w);
+      return sourceFilter === "all" || w.source === sourceFilter;
+    })
     .map((w) => (w.source === "global" ? withTrans(w, session.lang) : w));
-  const total = counts && !q
+  const total = counts && !q && sourceFilter !== "article"
     ? (sourceFilter === "personal" ? counts.p : sourceFilter === "global" ? counts.g : counts.g + counts.p)
     : null;
   const pages = total != null ? pageCount(total, WORD_PAGE_SERVER) : null;
@@ -492,6 +497,7 @@ export function WordsTab({ session }) {
         <option value="all">Alle Wörter</option>
         <option value="personal">Meine Wörter</option>
         <option value="global">Kurswörter</option>
+        <option value="article">🔤 Artikel-Wörter</option>
       </select>
     </div>
     <div className="words-header-sticky">

@@ -4,9 +4,9 @@ import { db } from "../../lib/firebase";
 import { LIMIT, FOLDER_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields, buildDesc, descFresh } from "../../lib/word";
-import { classSync, requestPronunciation, resyncPronunciation, purgeCollocationSets } from "../../lib/api";
+import { classSync, requestPronunciation, resyncPronunciation, purgeCollocationSets, lookupGenus } from "../../lib/api";
 import { pronState } from "../../lib/pron";
-import { resolveArticleAnswer } from "../../lib/article";
+import { resolveArticleAnswer, isArticleWord } from "../../lib/article";
 import { loadGlobalFolders } from "../../data/loaders";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
@@ -36,10 +36,30 @@ function normalizeArticle(v) {
   return VALID_ARTICLES.includes(t) ? t : String(v || "");
 }
 
+const DEFINITE_ARTICLES = ["der", "die", "das"];
+
+// Warn only when a word is being put in the Artikel deck with no way to derive
+// an article: no der/die/das typed AND Wiktionary explicitly reports a non-noun.
+// A null/unknown isNoun (Wiktionary miss, rare/compound noun) never warns.
+async function articleNounWarning(de, article) {
+  const word = String(de || "").trim();
+  if (!word) return "";
+  if (DEFINITE_ARTICLES.includes(String(article || "").trim().toLowerCase())) return "";
+  try {
+    const { genus, isNoun } = await lookupGenus(word);
+    if (genus == null && isNoun === false) {
+      return `„${word}" scheint kein Nomen zu sein — im Artikel-Training braucht ein Wort einen Artikel. Trotzdem im Artikel-Training behalten?`;
+    }
+  } catch { /* Wiktionary nicht erreichbar → nicht warnen */ }
+  return "";
+}
+
 export function ManageTab({ session }) {
   const [de, setDe] = useState(""); const [article, setArticle] = useState("");
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
   const [desc, setDesc] = useState("");
+  const [inCards, setInCards] = useState(true); const [inArticle, setInArticle] = useState(true);
+  const [onlyArticle, setOnlyArticle] = useState(false);
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
   const [bulk, setBulk] = useState(""); const [msg, setMsg] = useState("");
   const [folderName, setFolderName] = useState(""); const [folderIcon, setFolderIcon] = useState("📁");
@@ -211,6 +231,33 @@ export function ManageTab({ session }) {
     } catch { flashRow(w.id, "⚠ Keine Berechtigung."); }
   }
 
+  async function toggleCard(w) {
+    const next = w.cardOff !== true;
+    try {
+      await dbSet(`global_words/${w.id}`, { cardOff: next, updatedAt: serverTimestamp(), updatedBy: session.uid });
+      setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, cardOff: next, updatedAt: Date.now(), updatedBy: session.uid } : x)));
+      classSync("word-assigned", { wordIds: [w.id] }).catch(() => {});
+      flashRow(w.id, next ? "✓ Aus Wörterkarten entfernt" : "✓ In Wörterkarten aufgenommen");
+    } catch { flashRow(w.id, "⚠ Keine Berechtigung."); }
+  }
+
+  async function bulkSetCard(off) {
+    const ids = Array.from(selectedWords);
+    const targets = words.filter((w) => ids.includes(w.id) && (w.cardOff === true) !== off);
+    if (!targets.length) { flash("⚠ Keine passenden Wörter ausgewählt"); return; }
+    const changed = [];
+    for (const w of targets) {
+      try {
+        await dbSet(`global_words/${w.id}`, { cardOff: off, updatedAt: serverTimestamp(), updatedBy: session.uid });
+        setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, cardOff: off, updatedAt: Date.now(), updatedBy: session.uid } : x)));
+        changed.push(w.id);
+      } catch { /* Sammelaktion: einzelne Fehler überspringen */ }
+    }
+    if (changed.length) classSync("word-assigned", { wordIds: changed }).catch(() => {});
+    flash(off ? `✓ Wörterkarten für ${changed.length} Wörter aus` : `✓ Wörterkarten für ${changed.length} Wörter ein`);
+    clearSelection();
+  }
+
   async function bulkSetArtikel(off) {
     const ids = Array.from(selectedWords);
     const targets = words.filter((w) => ids.includes(w.id) && resolveArticleAnswer(w) && (w.artOff === true) !== off);
@@ -236,6 +283,10 @@ export function ManageTab({ session }) {
     if (!word) return;
     const res = validateWordInput(wEdit, { requireRu: false });
     if (!res.ok) { flashRow(id, "⚠ " + res.error); return; }
+    if (word.artOff !== true) {
+      const warn = await articleNounWarning(res.clean.de, res.clean.article);
+      if (warn && !confirm(warn)) return;
+    }
     const changedDe = germanChanged(word, res.clean);
     const fid = wEdit.folderId || null;
     const memberUids = folderMembersFor(fid);
@@ -312,12 +363,16 @@ export function ManageTab({ session }) {
   async function addWord() {
     if (!de.trim()) return;
     if (imageUrl && !validImageUrl(imageUrl)) { flash("⚠ Ungültige Bild-URL."); return; }
+    if (inArticle) {
+      const warn = await articleNounWarning(de, article);
+      if (warn && !confirm(warn)) return;
+    }
     const id = `g_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const cleanDe = clip(de.trim(), LIMIT.de);
-    const w = { de: cleanDe, article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), desc: buildDesc(desc, cleanDe), ...searchFields({ de, ru }) };
+    const w = { de: cleanDe, article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), desc: buildDesc(desc, cleanDe), ...(inCards ? {} : { cardOff: true }), ...(inArticle ? {} : { artOff: true }), ...searchFields({ de, ru }) };
     try {
       await dbSet(`global_words/${id}`, w); setWords((prev) => [...prev, { ...w, id }]);
-      setDe(""); setArticle(""); setRu(""); setExample(""); setDesc(""); setImageUrl(""); setArticleTouched(false); flash("✓ Wort hinzugefügt");
+      setDe(""); setArticle(""); setRu(""); setExample(""); setDesc(""); setImageUrl(""); setArticleTouched(false); setInCards(true); setInArticle(true); flash("✓ Wort hinzugefügt");
       classSync("word-assigned", { wordIds: [id] }).catch(() => {});
       requestPronunciation(id, "global").catch(() => {});
     }
@@ -333,7 +388,7 @@ export function ManageTab({ session }) {
       let de_ = parts[0], art_ = "", ru_ = parts[1] || "", ex_ = parts[2] || "";
       const m = de_.match(/^(der|die|das|ein|eine)\s+(.+)$/i);
       if (m) { art_ = m[1]; de_ = m[2]; }
-      newW.push({ de: clip(de_, LIMIT.de), article: cleanArticle(art_), ru: clip(ru_, LIMIT.ru), example: clip(ex_, LIMIT.example), folderId: folderId || null, imageUrl: null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), ...searchFields({ de: de_, ru: ru_ }) });
+      newW.push({ de: clip(de_, LIMIT.de), article: cleanArticle(art_), ru: clip(ru_, LIMIT.ru), example: clip(ex_, LIMIT.example), folderId: folderId || null, imageUrl: null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), ...(inCards ? {} : { cardOff: true }), ...(inArticle ? {} : { artOff: true }), ...searchFields({ de: de_, ru: ru_ }) });
     }
     if (!newW.length) { flash("⚠ Format: Wort – Übersetzung"); return; }
     const stamp = Date.now();
@@ -488,7 +543,7 @@ export function ManageTab({ session }) {
 
   const pronTodo = words.filter((w) => pronState(w) !== "ready").map((w) => w.id);
   const searching = !!wordSearch.trim();
-  const pagedWords = windowRows(page, pageIdx, WORD_PAGE_SERVER);
+  const pagedWords = windowRows(page, pageIdx, WORD_PAGE_SERVER).filter((w) => !onlyArticle || isArticleWord(w));
   const bulkCount = bulk.split("\n").map((l) => l.trim()).filter(Boolean).length;
   const pages = total != null && !searching ? pageCount(total, WORD_PAGE_SERVER) : null;
   const atLastPage = pages != null ? pageIdx >= pages - 1 : !canGoNext(page, pageIdx, WORD_PAGE_SERVER);
@@ -587,6 +642,29 @@ export function ManageTab({ session }) {
             </div>
           )}
 
+          <div className="deck-picker">
+            <span className="deck-picker-label">Üben als:</span>
+            <button
+              type="button"
+              className={`deck-chip${inCards ? " on" : ""}`}
+              aria-pressed={inCards}
+              onClick={() => setInCards((v) => !v)}
+              title="Als Vokabelkarte zum Lernen (Deutsch ⇄ Übersetzung)"
+            >
+              <span className="deck-chip-mark">{inCards ? "✓" : "＋"}</span>🃏 Wörterkarten
+            </button>
+            <button
+              type="button"
+              className={`deck-chip art${inArticle ? " on" : ""}`}
+              aria-pressed={inArticle}
+              onClick={() => setInArticle((v) => !v)}
+              title="Für das der/die/das-Training (nur Nomen)"
+            >
+              <span className="deck-chip-mark">{inArticle ? "✓" : "＋"}</span>🔤 Artikel
+            </button>
+            {!inCards && !inArticle && <span className="deck-warn">⚠ In keinem Training</span>}
+          </div>
+
           <button
             type="button"
             className="options-toggle"
@@ -649,33 +727,51 @@ export function ManageTab({ session }) {
 
       <div className="manage-words-list">
         <div className="words-header-sticky">
-          <div className="words-header-main">
+          <div className="words-header-top">
             <label className="words-select-all">
               <input type="checkbox" checked={pagedWords.length > 0 && pagedWords.every((w) => selectedWords.has(w.id))} onChange={selectAllVisible} />
               <span className="sec-label" style={{ margin: 0 }}>Kurswörter ({searching ? words.length : (total ?? words.length)})</span>
             </label>
-            <div className="words-header-actions">
-              <button className="btn-sm" onClick={() => syncPron(pronTodo)} disabled={!!syncing || !words.length}
-                title="Worttrennung, Lautschrift und Audio für die geladenen Kurswörter nachladen">
-                {syncing ? `🔊 ${syncing.done} / ${syncing.total}` : `🔊 Aussprache synchronisieren${pronTodo.length ? ` (${pronTodo.length})` : ""}`}
-              </button>
-              {syncing && <button className="btn-sm" onClick={() => { cancelSync.current = true; }}>Abbrechen</button>}
-              <input placeholder="🔍 Wörter suchen…" value={wordSearch} onChange={(e) => onSearchChange(e.target.value)}
-                style={{ flex: "1 1 160px", maxWidth: 260, padding: "8px 11px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit" }} />
+            <div className="words-search">
+              <span className="words-search-icon" aria-hidden="true">🔍</span>
+              <input className="words-search-input" placeholder="Wörter suchen…" value={wordSearch} onChange={(e) => onSearchChange(e.target.value)} />
             </div>
+          </div>
+          <div className="words-header-tools">
+            <button className={`chip-toggle${onlyArticle ? " on" : ""}`} onClick={() => setOnlyArticle((v) => !v)}
+              title="Nur Nomen mit erkanntem Artikel anzeigen (auf der geladenen Seite)">
+              <span className="deck-chip-mark">{onlyArticle ? "✓" : ""}</span>🔤 Nur Artikel-Wörter
+            </button>
+            <button className="btn-tool" onClick={() => syncPron(pronTodo)} disabled={!!syncing || !words.length}
+              title="Worttrennung, Lautschrift und Audio für die geladenen Kurswörter nachladen">
+              {syncing ? `🔊 ${syncing.done} / ${syncing.total}` : `🔊 Aussprache synchronisieren${pronTodo.length ? ` (${pronTodo.length})` : ""}`}
+            </button>
+            {syncing && <button className="btn-tool" onClick={() => { cancelSync.current = true; }}>Abbrechen</button>}
           </div>
           {selectedWords.size > 0 && (
             <div className="bulk-actions-bar">
-              <span style={{ fontSize: 13, color: "var(--ink-soft)" }}>{selectedWords.size} ausgewählt</span>
-              <select value="" onChange={(e) => { if (e.target.value) bulkMoveSelected(e.target.value); }} style={{ flex: "none", maxWidth: 180 }}>
-                <option value="">📁 In Ordner verschieben</option>
-                {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
-                <option value="">📂 Kein Ordner</option>
-              </select>
-              <button className="btn-sm" onClick={() => bulkSetArtikel(false)} title="Ausgewählte Nomen ins Artikeltraining aufnehmen">🔤 Training ein</button>
-              <button className="btn-sm" onClick={() => bulkSetArtikel(true)} title="Ausgewählte Nomen vom Artikeltraining ausschließen">🔤 Training aus</button>
-              <button className="btn-sm danger" onClick={bulkDeleteSelected}>Löschen</button>
-              <button className="btn-sm" onClick={clearSelection}>Auswahl aufheben</button>
+              <div className="bulk-row">
+                <span className="bulk-count">{selectedWords.size} ausgewählt</span>
+                <select className="bulk-move" value="" onChange={(e) => { if (e.target.value) bulkMoveSelected(e.target.value); }}>
+                  <option value="">📁 Verschieben…</option>
+                  {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+                  <option value="">📂 Kein Ordner</option>
+                </select>
+                <div className="bulk-seg">
+                  <span className="bulk-seg-label">🃏 Karten</span>
+                  <button className="bulk-seg-btn on" onClick={() => bulkSetCard(false)} title="Ausgewählte Wörter in die Wörterkarten aufnehmen">ein</button>
+                  <button className="bulk-seg-btn off" onClick={() => bulkSetCard(true)} title="Ausgewählte Wörter aus den Wörterkarten ausschließen">aus</button>
+                </div>
+                <div className="bulk-seg">
+                  <span className="bulk-seg-label">🔤 Artikel</span>
+                  <button className="bulk-seg-btn on" onClick={() => bulkSetArtikel(false)} title="Ausgewählte Nomen ins Artikel-Training aufnehmen">ein</button>
+                  <button className="bulk-seg-btn off" onClick={() => bulkSetArtikel(true)} title="Ausgewählte Nomen vom Artikel-Training ausschließen">aus</button>
+                </div>
+              </div>
+              <div className="bulk-row bulk-row-end">
+                <button className="bulk-del" onClick={bulkDeleteSelected} title="Ausgewählte löschen">Löschen</button>
+                <button className="bulk-clear" onClick={clearSelection}>Auswahl aufheben</button>
+              </div>
             </div>
           )}
         </div>
@@ -728,44 +824,57 @@ export function ManageTab({ session }) {
                 </div>
               </div>
             ) : (
-              <div className={`word-item word-item-card${selectedWords.has(w.id) ? " selected" : ""}`}>
-                <div className="word-card-main">
-                  <label className="word-checkbox">
-                    <input type="checkbox" checked={selectedWords.has(w.id)} onChange={() => toggleWordSelection(w.id)} />
-                  </label>
-                  {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
-                  <div className="wi-text">
-                    <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{highlightMatch(w.de, wordSearch)}</div>
-                    <div className="wi-ru">{highlightMatch(w.ru, wordSearch)}{w.example && <span style={{ fontStyle: "italic", color: "#aaa" }}> — {w.example}</span>}</div>
-                    {w.desc?.text && <div className="wi-desc">{w.desc.text}</div>}
-                  </div>
-                </div>
-                <div className="wi-tools">
-                  {resolveArticleAnswer(w) && (
+              <div className={`word-item-card${selectedWords.has(w.id) ? " selected" : ""}`}>
+                <label className="word-checkbox">
+                  <input type="checkbox" checked={selectedWords.has(w.id)} onChange={() => toggleWordSelection(w.id)} />
+                </label>
+                {w.imageUrl && validImageUrl(w.imageUrl) ? <img src={cldImg(w.imageUrl, 200)} className="wi-img" alt="" loading="lazy" decoding="async" /> : <div className="wi-img-placeholder">🔤</div>}
+                <div className="wi-body">
+                  <div className="wi-de">{w.article && <span className="wi-article">{w.article}</span>}{highlightMatch(w.de, wordSearch)}</div>
+                  {(w.ru || w.example) && (
+                    <div className="wi-ru">{highlightMatch(w.ru, wordSearch)}{w.example && <span className="wi-example">{w.ru ? " — " : ""}{w.example}</span>}</div>
+                  )}
+                  {w.desc?.text && <div className="wi-desc">{w.desc.text}</div>}
+                  <div className="wi-meta">
+                    <select className="folder-chip" value={w.folderId || ""} onChange={(e) => moveWord(w, e.target.value)} title="Ordner wechseln">
+                      <option value="">📂 Kein Ordner</option>
+                      {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+                    </select>
                     <button
                       type="button"
-                      className="artikel-toggle"
-                      onClick={() => toggleArtikel(w)}
-                      title={w.artOff === true
-                        ? "Aus dem Artikeltraining ausgeschlossen — zum Aktivieren tippen"
-                        : "Im Artikeltraining aktiv — zum Ausschließen tippen"}
+                      className={`deck-chip${w.cardOff === true ? "" : " on"}`}
+                      onClick={() => toggleCard(w)}
+                      title={w.cardOff === true
+                        ? "Nicht in den Wörterkarten — zum Aktivieren tippen"
+                        : "In den Wörterkarten — zum Ausschließen tippen"}
                     >
-                      <span className="artikel-toggle-label">Artikel</span>
-                      <span className={`switch${w.artOff === true ? "" : " on"}`}><span className="switch-knob" /></span>
+                      <span className="deck-chip-mark">{w.cardOff === true ? "" : "✓"}</span>🃏 Karten
                     </button>
-                  )}
+                    {resolveArticleAnswer(w) && (
+                      <button
+                        type="button"
+                        className={`deck-chip art${w.artOff === true ? "" : " on"}`}
+                        onClick={() => toggleArtikel(w)}
+                        title={w.artOff === true
+                          ? "Nicht im Artikel-Training — zum Aktivieren tippen"
+                          : "Im Artikel-Training — zum Ausschließen tippen"}
+                      >
+                        <span className="deck-chip-mark">{w.artOff === true ? "" : "✓"}</span>🔤 Artikel
+                      </button>
+                    )}
+                    {w.cardOff === true && (w.artOff === true || !resolveArticleAnswer(w)) && (
+                      <span className="deck-warn" title="Dieses Wort erscheint in keinem Training">⚠ Kein Training</span>
+                    )}
+                  </div>
+                </div>
+                <div className="wi-actions">
                   {(() => {
                     const s = pronState(w);
-                    const label = s === "ready" ? "🔊" : s === "failed" ? "🔊" : "🔊";
                     const title = s === "ready" ? "Aussprache vorhanden" : s === "failed" ? "Keine Aussprachedaten" : "Aussprache fehlt noch";
-                    return <span className={`pron-badge${s === "ready" ? " ready" : s === "failed" ? " failed" : ""}`} title={title}>{label}</span>;
+                    return <span className={`pron-badge${s === "ready" ? " ready" : s === "failed" ? " failed" : ""}`} title={title}>🔊</span>;
                   })()}
-                  <select value={w.folderId || ""} onChange={(e) => moveWord(w, e.target.value)} title="Ordner wechseln">
-                    <option value="">📂 Kein Ordner</option>
-                    {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
-                  </select>
-                  <button className="btn-sm" onClick={() => startWordEdit(w)} title="Bearbeiten">✏️</button>
-                  <button className="btn-del" onClick={() => deleteWord(w.id)}>✕</button>
+                  <button className="btn-icon" onClick={() => startWordEdit(w)} title="Bearbeiten">✏️</button>
+                  <button className="btn-icon danger" onClick={() => deleteWord(w.id)} title="Löschen">✕</button>
                 </div>
               </div>
             )}
