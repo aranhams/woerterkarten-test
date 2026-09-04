@@ -32,7 +32,9 @@ export function normalizeRepeatEntry(e) {
   const startedAt = e.startedAt && typeof e.startedAt.toMillis === "function"
     ? e.startedAt.toMillis()
     : (e.startedAt || 0);
-  return { id: e.id || "legacy", folderIds, label: e.label || "", startedAt, expiresAt: e.expiresAt ?? null };
+  const audience = e.audience === "selected" ? "selected" : "all";
+  const uids = audience === "selected" && Array.isArray(e.uids) ? e.uids.map(String).filter(Boolean) : [];
+  return { id: e.id || "legacy", folderIds, label: e.label || "", startedAt, expiresAt: e.expiresAt ?? null, audience, uids };
 }
 
 function entryIsLive(e, now) {
@@ -48,4 +50,13 @@ export function listLiveRepeats(cls, now = Date.now()) {
     return out;
   }
   return repeatIsLive(cls?.repeat, now) ? [normalizeRepeatEntry(cls.repeat)] : [];
+}
+
+export function repeatTargetsUid(entry, uid) {
+  return entry.audience !== "selected"
+    || (Array.isArray(entry.uids) && entry.uids.includes(uid));
+}
+
+export function listLiveRepeatsFor(cls, uid, now = Date.now()) {
+  return listLiveRepeats(cls, now).filter((e) => repeatTargetsUid(e, uid));
 }

@@ -1,7 +1,7 @@
 import { verifyBearer, applyCors, getDb } from "./_firebase.js";
 import { rateLimit } from "./_ratelimit.js";
 import { requestLogger } from "./_log.js";
-import { listLiveRepeats } from "../shared/repeat.js";
+import { listLiveRepeatsFor } from "../shared/repeat.js";
 
 const DAY_MS = 86_400_000;
 const CARDS_CAP = 500;
@@ -60,9 +60,9 @@ export default async function handler(req, res) {
       L.done("warn", "repeat.not_member", 403, { uid: user.uid, classId });
       return res.status(403).json({ error: "Forbidden" });
     }
-    const live = listLiveRepeats(cls);
+    const live = listLiveRepeatsFor(cls, user.uid);
     // Serve a specific repeat when the student names one; otherwise the union of
-    // all live repeats for this class.
+    // all live repeats this student is targeted by.
     const selected = repeatId ? live.filter((e) => e.id === repeatId) : live;
     if (!selected.length) {
       L.done("info", "repeat.inactive", 200, { uid: user.uid, classId, repeatId });

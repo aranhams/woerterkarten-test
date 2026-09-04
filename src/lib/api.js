@@ -128,7 +128,7 @@ export async function getArticleQuiz({ folderId = null, classId = null } = {}) {
   return data;
 }
 
-export const startRepeat = (classId, folderIds, duration) => classSync("start-repeat", { classId, folderIds, duration });
+export const startRepeat = (classId, folderIds, duration, audience = "all", uids = []) => classSync("start-repeat", { classId, folderIds, duration, audience, uids });
 export const stopRepeat = (classId) => classSync("stop-repeat", { classId });
 export const removeRepeat = (classId, repeatId) => classSync("remove-repeat", { classId, repeatId });
 

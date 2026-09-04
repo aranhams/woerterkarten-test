@@ -601,6 +601,14 @@ async function dispatch({ db, auth, user, action, body, L }) {
       const duration = body.duration === null || body.duration === undefined ? null : Number(body.duration);
       if (!isValidDuration(duration)) throw new HttpError(400, "Dauer ungültig");
 
+      const audience = body.audience === "selected" ? "selected" : "all";
+      let uids = [];
+      if (audience === "selected") {
+        const roster = new Set(Array.isArray(data.memberUids) ? data.memberUids : []);
+        uids = parseUids(body.uids).filter((u) => roster.has(u));
+        if (!uids.length) throw new HttpError(400, "Keine Schüler ausgewählt");
+      }
+
       const folderSnaps = await db.getAll(...folderIds.map((fid) => db.doc(`global_folders/${fid}`)));
       const label = folderSnaps
         .map((s) => { const fd = s.exists ? s.data() : {}; return `${fd.icon || "📁"} ${fd.name || "Ordner"}`; })
@@ -616,6 +624,8 @@ async function dispatch({ db, auth, user, action, body, L }) {
         startedBy: user.uid,
         startedAt: now,
         expiresAt: computeExpiresAt(duration, now),
+        audience,
+        ...(audience === "selected" ? { uids } : {}),
       };
       // Keep only still-live entries, migrating any legacy singular directive, then append.
       const existing = Array.isArray(data.repeats)

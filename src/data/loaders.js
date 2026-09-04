@@ -1,7 +1,7 @@
 import { collection, query, where, documentId, getDocs, increment, serverTimestamp } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { lowerKey } from "../lib/word";
-import { listLiveRepeats } from "../../shared/repeat.js";
+import { listLiveRepeatsFor } from "../../shared/repeat.js";
 import { dbGet, dbSet } from "./db";
 import { cachedGetAll, cachedQuery, cacheHas, cacheGet, cacheSet, cacheUpdate } from "./cache";
 
@@ -147,7 +147,7 @@ export async function loadActiveRepeats(uid) {
     const snap = await getDocs(query(collection(db, "classes"), where("memberUids", "array-contains", uid)));
     const out = [];
     for (const d of snap.docs) {
-      for (const e of listLiveRepeats(d.data())) {
+      for (const e of listLiveRepeatsFor(d.data(), uid)) {
         out.push({ classId: d.id, repeatId: e.id, folderIds: e.folderIds, label: e.label, expiresAt: e.expiresAt, startedAt: e.startedAt });
       }
     }

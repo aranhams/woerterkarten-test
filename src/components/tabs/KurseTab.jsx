@@ -27,6 +27,8 @@ export function KurseTab({ session }) {
   const [classSearch, setClassSearch] = useState("");
   const [repeatFolders, setRepeatFolders] = useState(() => new Set());
   const [repeatDuration, setRepeatDuration] = useState("1");
+  const [repeatAudience, setRepeatAudience] = useState("all");
+  const [repeatUids, setRepeatUids] = useState(() => new Set());
 
   async function reload() {
     clearDataCache();
@@ -46,7 +48,7 @@ export function KurseTab({ session }) {
     })();
   }, []);
 
-  useEffect(() => { setRepeatFolders(new Set()); setRepeatDuration("15"); }, [selectedId]);
+  useEffect(() => { setRepeatFolders(new Set()); setRepeatDuration("15"); setRepeatAudience("all"); setRepeatUids(new Set()); }, [selectedId]);
 
   function flash(m) { setMsg(m); setTimeout(() => setMsg(""), 3000); }
 
@@ -105,6 +107,13 @@ export function KurseTab({ session }) {
     ? folders.filter((f) => (selected.folders || []).some((e) => e && e.folderId === f.id))
     : [];
   const liveRepeats = selected ? listLiveRepeats(selected) : [];
+  const audienceLabel = (e) => {
+    if (e.audience !== "selected") return "Alle";
+    const names = (e.uids || []).map(nameOf);
+    if (names.length === 0) return "Alle";
+    if (names.length <= 3) return names.join(", ");
+    return `${names.slice(0, 3).join(", ")} +${names.length - 3}`;
+  };
   const fmtRemaining = (expiresAt) => {
     if (expiresAt == null) return "unbegrenzt";
     const ms = expiresAt - Date.now();
@@ -212,14 +221,26 @@ export function KurseTab({ session }) {
       return next;
     });
   }
+  function toggleRepeatUid(uid) {
+    setRepeatUids((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid);
+      else next.add(uid);
+      return next;
+    });
+  }
   async function addRepeat() {
     if (!selected || repeatFolders.size === 0) return;
+    if (repeatAudience === "selected" && repeatUids.size === 0) { flash("⚠ Wähle mindestens einen Schüler"); return; }
     const duration = repeatDuration === "none" ? null : Number(repeatDuration);
+    const uids = repeatAudience === "selected" ? [...repeatUids] : [];
     try {
-      const r = await startRepeat(selected.id, [...repeatFolders], duration);
+      const r = await startRepeat(selected.id, [...repeatFolders], duration, repeatAudience, uids);
       patchClass(selected.id, { repeats: r.repeats, repeat: null });
       setRepeatFolders(new Set());
       setRepeatDuration("15");
+      setRepeatAudience("all");
+      setRepeatUids(new Set());
       flash("✓ Wiederholung hinzugefügt");
     } catch (e) { flash("⚠ " + (e.message || "Fehler")); }
   }
@@ -381,15 +402,26 @@ export function KurseTab({ session }) {
         {liveRepeats.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <div className="sec-label">Aktive Wiederholungen ({liveRepeats.length})</div>
-            {liveRepeats.map((e) => (
-              <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: "1px solid var(--ivory-dark)", padding: "8px 0" }}>
-                <span style={{ fontSize: 13, flex: 1, minWidth: 160 }}>
-                  <span style={{ color: "var(--sage)", fontWeight: 600 }}>Aktiv</span>
-                  {" — "}{e.label || "Ordner"} · endet {fmtRemaining(e.expiresAt)}
-                </span>
-                <button className="btn-sm danger" onClick={() => deleteRepeat(e.id)} disabled={busy}>Beenden</button>
-              </div>
-            ))}
+            <div className="repeat-live-list">
+              {liveRepeats.map((e) => {
+                const targeted = e.audience === "selected" && (e.uids || []).length > 0;
+                return (
+                  <div key={e.id} className="repeat-live">
+                    <div className="repeat-live-body">
+                      <div className="repeat-live-title">{e.label || "Ordner"}</div>
+                      <div className="repeat-live-meta">
+                        <span className="repeat-chip status">Aktiv</span>
+                        <span className={`repeat-chip${targeted ? " target" : ""}`}>
+                          👥 {targeted ? audienceLabel(e) : "Alle Schüler"}
+                        </span>
+                        <span className="repeat-chip">⏳ {fmtRemaining(e.expiresAt)}</span>
+                      </div>
+                    </div>
+                    <button className="btn-sm danger repeat-live-stop" onClick={() => deleteRepeat(e.id)} disabled={busy}>Beenden</button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
         {assignedFolders.length === 0 ? (
@@ -412,6 +444,28 @@ export function KurseTab({ session }) {
           <p style={{ fontSize: 11, color: "var(--ink-soft)", marginBottom: 10 }}>
             Tippe die Ordner an, um sie aus- oder abzuwählen. Mehrere möglich.
           </p>
+          <div className="sec-label">Für welche Schüler?</div>
+          <div className="dir-toggle" style={{ margin: "0 0 8px" }}>
+            <button className={`dir-btn${repeatAudience === "all" ? " active" : ""}`} onClick={() => setRepeatAudience("all")}>Alle</button>
+            <button className={`dir-btn${repeatAudience === "selected" ? " active" : ""}`} onClick={() => setRepeatAudience("selected")}>Ausgewählte</button>
+          </div>
+          {repeatAudience === "selected" && (
+            members.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Erst Schüler hinzufügen.</p>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                {members.map((uid) => {
+                  const on = repeatUids.has(uid);
+                  return (
+                    <button key={uid} className="btn-sm" onClick={() => toggleRepeatUid(uid)}
+                      style={on ? { borderColor: "var(--sage)", color: "var(--sage)", background: "var(--sage-pale)" } : {}}>
+                      {on ? "✓ " : ""}{nameOf(uid)}
+                    </button>
+                  );
+                })}
+              </div>
+            )
+          )}
           <div className="form-row" style={{ flexWrap: "wrap" }}>
             <select value={repeatDuration} onChange={(e) => setRepeatDuration(e.target.value)} style={{ flex: "0 1 130px" }}>
               <option value="15">15 Minuten</option>
@@ -419,7 +473,7 @@ export function KurseTab({ session }) {
               <option value="60">1 Stunde</option>
               <option value="1440">1 Tag</option>
             </select>
-            <button className="btn-add" onClick={addRepeat} disabled={busy || repeatFolders.size === 0}>
+            <button className="btn-add" onClick={addRepeat} disabled={busy || repeatFolders.size === 0 || (repeatAudience === "selected" && repeatUids.size === 0)}>
               Hinzufügen
             </button>
           </div>
