@@ -3,6 +3,7 @@ import { FOLDER_PAGE } from "../../lib/constants";
 import { getProgressReport, getStudentProgressDetail, getWeakCollocations } from "../../lib/api";
 import { loadAllClasses } from "../../data/loaders";
 import { clearDataCache } from "../../data/cache";
+import { spellDiff } from "../../lib/spell";
 
 const C = { sicher: "#3f8a5c", fastSicher: "#59b98c", learning: "#c8773a", neu: "#cbc8be", struggle: "#c0392b" };
 
@@ -29,6 +30,7 @@ function flagsFor(r) {
   if (r.started >= MIN_STARTED && r.pct < LOW_SECURE_PCT && hard > 0) flags.push("wenig gefestigt");
   if ((r.collocHard || 0) >= 2) flags.push("Wortverbindungen schwierig");
   if ((r.articleHard || 0) >= 2) flags.push("Artikel schwierig");
+  if ((r.spellHard || 0) >= 2) flags.push("Rechtschreibung schwierig");
   return flags;
 }
 
@@ -69,6 +71,7 @@ const REASON_HELP = {
   "inaktiv": "Seit Längerem nicht mehr geübt — oder noch nie gestartet.",
   "wortverbindungen schwierig": "Mehrere Wortverbindungen werden wiederholt falsch beantwortet und sind noch nicht gefestigt.",
   "artikel schwierig": "Bei mehreren Nomen wird der Artikel wiederholt falsch beantwortet und ist noch nicht gefestigt.",
+  "rechtschreibung schwierig": "Mehrere Wörter werden beim Schreibtraining wiederholt falsch geschrieben (≥ 3× falsch).",
 };
 const reasonHelp = (label) => REASON_HELP[String(label || "").toLowerCase()] || undefined;
 
@@ -96,6 +99,22 @@ function Legend({ dist }) {
       </span>
     ))}
   </div>;
+}
+
+function SpellMiss({ guess, target }) {
+  if (!guess) return null;
+  return (
+    <span translate="no" style={{ fontFamily: "'SFMono-Regular',ui-monospace,monospace", letterSpacing: ".5px" }}>
+      {spellDiff(guess, target).map((seg, i) => (
+        <span key={i} style={{
+          color: seg.status === "match" ? C.sicher : seg.status === "missing" ? "var(--ink-soft)" : C.struggle,
+          textDecoration: seg.status === "missing" ? "underline" : seg.status === "extra" ? "line-through" : "none",
+          opacity: seg.status === "missing" ? 0.65 : 1,
+          fontWeight: seg.status === "match" ? 400 : 700,
+        }}>{seg.ch}</span>
+      ))}
+    </span>
+  );
 }
 
 function StruggleChart({ hardWords }) {
@@ -385,6 +404,7 @@ export function ProgressTab({ session }) {
       setDetails((d) => ({ ...d, [uid]: {
         words: r.words || [], folders: r.folders || {}, activity: r.activity || {},
         privateWords: r.privateWords || [], privateFolders: r.privateFolders || {},
+        spelling: r.spelling || [],
       } }));
     } catch (e) {
       setDetails((d) => ({ ...d, [uid]: { error: e.message || "Fehler" } }));
@@ -425,6 +445,9 @@ export function ProgressTab({ session }) {
   const studentsWithHardArticle = assignedRows
     .filter((r) => (r.articleHard || 0) > 0)
     .sort((a, b) => (b.articleHard || 0) - (a.articleHard || 0) || a.username.localeCompare(b.username));
+  const studentsWithHardSpelling = assignedRows
+    .filter((r) => (r.spellHard || 0) > 0)
+    .sort((a, b) => (b.spellHard || 0) - (a.spellHard || 0) || a.username.localeCompare(b.username));
   const others = withFlags
     .filter((x) => !attentionUids.has(x.r.uid))
     .map((x) => ({ ...x, risk: x.r.assigned > 0 ? riskFor(x.r, now).score : null }))
@@ -634,6 +657,36 @@ export function ProgressTab({ session }) {
           </div>
         )}
 
+        <div className="sec-label" style={{ marginTop: 18 }}>✍️ Schwierige Rechtschreibung — Schüler ({studentsWithHardSpelling.length})</div>
+        {studentsWithHardSpelling.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 16 }}>👍 Keine Schüler mit schwieriger Rechtschreibung.</p>
+        ) : (
+          <div className="word-list" style={{ marginBottom: 12 }}>
+            {studentsWithHardSpelling.map((r) => (
+              <div key={r.uid} className="word-item" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                  <div className="wi-text">
+                    <div className="wi-de">{r.username}</div>
+                    <div className="wi-ru">{r.spellHard === 1 ? "1 schwieriges Wort" : `${r.spellHard} schwierige Wörter`} · {r.spellOk || 0}/{r.spellTotal || 0} sicher geschrieben</div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.struggle, whiteSpace: "nowrap" }}>{r.spellHard}</span>
+                </div>
+                {r.spellHardWords && r.spellHardWords.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 10px", fontSize: 12 }}>
+                    {r.spellHardWords.map((w) => (
+                      <span key={w.wordId} style={{ color: "var(--ink-soft)", background: "var(--ivory-dark)", padding: "2px 8px", borderRadius: 12 }}>
+                        {w.de || w.wordId}
+                        {w.lastWrong && <> — <SpellMiss guess={w.lastWrong} target={w.de} /></>}
+                        <span style={{ color: C.struggle, marginLeft: 5, fontWeight: 700 }}>×{w.nm}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         <button className="btn-sm" style={{ marginBottom: 22 }} onClick={() => setShowAll((s) => !s)}>
           {showAll ? `▲ ${otherLabel} ausblenden` : `▾ ${otherLabel} (${others.length})`}
         </button>
@@ -690,6 +743,14 @@ export function ProgressTab({ session }) {
         ) : (
           <StruggleChart hardWords={report.hardArticles} />
         )}
+
+        {}
+        <div className="sec-label" style={{ marginTop: 22 }}>✍️ Schwierige Rechtschreibung</div>
+        {(report.hardSpelling || []).length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Noch keine schwierigen Wörter — sie erscheinen, sobald Schüler ein Wort im Schreibtraining mehrmals falsch schreiben (≥ 3× falsch).</p>
+        ) : (
+          <StruggleChart hardWords={report.hardSpelling} />
+        )}
       </>)}
 
       <p style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 22, textAlign: "right" }}>
@@ -725,8 +786,9 @@ function DetailPanel({ data, loading }) {
   if (loading) return <div style={panelBox}><span style={{ fontSize: 13, color: "var(--ink-soft)" }}>Lädt…</span></div>;
   if (data?.error) return <div style={panelBox}><span className="err">⚠ {data.error}</span></div>;
   if (!data || !Array.isArray(data.words)) return null;
-  const { words, folders = {}, privateWords = [], privateFolders = {} } = data;
-  if (words.length === 0 && privateWords.length === 0) {
+  const { words, folders = {}, privateWords = [], privateFolders = {}, spelling = [] } = data;
+  const spellMisses = spelling.filter((s) => (s.misses || 0) > 0 || (s.nm || 0) > 0);
+  if (words.length === 0 && privateWords.length === 0 && spelling.length === 0) {
     return <div style={panelBox}><span style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keine zugewiesenen Wörter.</span></div>;
   }
 
@@ -873,6 +935,34 @@ function DetailPanel({ data, loading }) {
           </div>
         );
       })}
+      {spellMisses.length > 0 && (
+        <div style={{ marginBottom: 14, padding: "11px 13px", background: "var(--red-pale)", borderRadius: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 9 }}>
+            <span style={{ fontSize: 12 }}>✍️</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--red-soft)" }}>
+              Schreibfehler — {spellMisses.length} {spellMisses.length === 1 ? "Wort" : "Wörter"}
+            </span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {spellMisses.map((s) => (
+              <div key={s.wordId} style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
+                <span style={{ fontWeight: 600, color: "var(--ink)" }}>
+                  {s.article && <span style={{ color: "var(--accent)", fontStyle: "italic" }}>{s.article} </span>}{s.de}
+                </span>
+                {s.lastWrong && (
+                  <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                    zuletzt: <SpellMiss guess={s.lastWrong} target={s.de} />
+                  </span>
+                )}
+                <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}
+                  title={`${s.misses}× von ${s.attempts} Versuchen falsch${s.hard ? " · aktuell schwierig" : ""}`}>
+                  {s.misses}/{s.attempts} falsch{s.hard ? <span style={{ color: C.struggle, fontWeight: 700 }}> · ⚠</span> : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {privateWords.length > 0 && <PrivateWordsSection words={privateWords} folders={privateFolders} />}
     </div>
   );

@@ -2,6 +2,7 @@
 export const INTERVALS = [0, 1, 3, 7, 14, 30];
 export const MASTERY_LEVEL = 3;
 export const HARD_NOCHMAL = 3;
+export const HARD_SPELL = 3;
 export const REGRESS_REPEAT = 2;
 
 const DAY_MS = 86400000;
@@ -52,6 +53,34 @@ export function summarizeHardArticles(wordById, progressByUid, { top = 15 } = {}
     .map(([wordId, rec]) => {
       const w = wordById.get(wordId) || {};
       return { wordId, de: w.de || "", article: resolveArticleAnswer(w) || w.article || "", stuck: rec.stuck, started: rec.started };
+    })
+    .filter((h) => h.stuck > 0)
+    .sort((a, b) => b.stuck - a.stuck || (b.stuck / b.started) - (a.stuck / a.started))
+    .slice(0, top);
+}
+
+export function isHardSpell(p) {
+  return !!p && (p.nm || 0) >= HARD_SPELL;
+}
+
+// Class-wide "hardest spellings": for every word, count students who keep
+// misspelling it (nm >= HARD_SPELL), mirroring hardWords. No noun/article guard —
+// every word is spellable.
+export function summarizeHardSpelling(wordById, progressByUid, { top = 15 } = {}) {
+  const stuckByWord = new Map();
+  for (const progressData of progressByUid.values()) {
+    for (const [wordId, p] of Object.entries(progressData || {})) {
+      if (!p) continue;
+      const rec = stuckByWord.get(wordId) || { stuck: 0, started: 0 };
+      rec.started++;
+      if (isHardSpell(p)) rec.stuck++;
+      stuckByWord.set(wordId, rec);
+    }
+  }
+  return [...stuckByWord.entries()]
+    .map(([wordId, rec]) => {
+      const w = wordById.get(wordId) || {};
+      return { wordId, de: w.de || "", article: w.article || "", stuck: rec.stuck, started: rec.started };
     })
     .filter((h) => h.stuck > 0)
     .sort((a, b) => b.stuck - a.stuck || (b.stuck / b.started) - (a.stuck / a.started))

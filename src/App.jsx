@@ -17,12 +17,14 @@ import { AdminTab } from "./components/tabs/AdminTab";
 import { DescribeTab } from "./components/tabs/DescribeTab";
 import { CollocationsPracticeTab } from "./components/tabs/CollocationsPracticeTab";
 import { ArticleTab } from "./components/tabs/ArticleTab";
+import { SpellTab } from "./components/tabs/SpellTab";
 
 const TAB_KEY = "dw_tab";
 const LEARN_MODE_KEY = "dw_learn_mode";
 const LEARN_MODES = [
   { id: "cards", label: "🃏 Wörterkarten" },
   { id: "article", label: "🔤 Artikel" },
+  { id: "spell", label: "✍️ Schreiben" },
   { id: "collearn", label: "🔗 Verbindungen" },
 ];
 function tabAllowed(t, { isTeacher, isAdmin, studentView }) {
@@ -135,6 +137,7 @@ export default function App() {
     {tab === "learn" && learnerTabs && (<>
       {learnMode === "cards" && <LearnTab session={session} />}
       {learnMode === "article" && <ArticleTab session={session} />}
+      {learnMode === "spell" && <SpellTab session={session} />}
       {learnMode === "collearn" && <CollocationsPracticeTab session={session} />}
     </>)}
     {tab === "words" && learnerTabs && <WordsTab session={session} />}

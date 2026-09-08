@@ -59,6 +59,7 @@ export function ManageTab({ session }) {
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
   const [desc, setDesc] = useState("");
   const [inCards, setInCards] = useState(true); const [inArticle, setInArticle] = useState(true);
+  const [inSchreiben, setInSchreiben] = useState(true);
   const [onlyArticle, setOnlyArticle] = useState(false);
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
   const [bulk, setBulk] = useState(""); const [msg, setMsg] = useState("");
@@ -241,6 +242,15 @@ export function ManageTab({ session }) {
     } catch { flashRow(w.id, "⚠ Keine Berechtigung."); }
   }
 
+  async function toggleSchreiben(w) {
+    const next = w.spellOff !== true;
+    try {
+      await dbSet(`global_words/${w.id}`, { spellOff: next, updatedAt: serverTimestamp(), updatedBy: session.uid });
+      setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, spellOff: next, updatedAt: Date.now(), updatedBy: session.uid } : x)));
+      flashRow(w.id, next ? "✓ Schreibtraining aus" : "✓ Schreibtraining ein");
+    } catch { flashRow(w.id, "⚠ Keine Berechtigung."); }
+  }
+
   async function bulkSetCard(off) {
     const ids = Array.from(selectedWords);
     const targets = words.filter((w) => ids.includes(w.id) && (w.cardOff === true) !== off);
@@ -269,6 +279,20 @@ export function ManageTab({ session }) {
       } catch { /* Sammelaktion: einzelne Fehler überspringen */ }
     }
     flash(off ? `✓ Artikeltraining für ${targets.length} Wörter aus` : `✓ Artikeltraining für ${targets.length} Wörter ein`);
+    clearSelection();
+  }
+
+  async function bulkSetSchreiben(off) {
+    const ids = Array.from(selectedWords);
+    const targets = words.filter((w) => ids.includes(w.id) && (w.spellOff === true) !== off);
+    if (!targets.length) { flash("⚠ Keine passenden Wörter ausgewählt"); return; }
+    for (const w of targets) {
+      try {
+        await dbSet(`global_words/${w.id}`, { spellOff: off, updatedAt: serverTimestamp(), updatedBy: session.uid });
+        setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, spellOff: off, updatedAt: Date.now(), updatedBy: session.uid } : x)));
+      } catch { /* Sammelaktion: einzelne Fehler überspringen */ }
+    }
+    flash(off ? `✓ Schreibtraining für ${targets.length} Wörter aus` : `✓ Schreibtraining für ${targets.length} Wörter ein`);
     clearSelection();
   }
 
@@ -369,10 +393,10 @@ export function ManageTab({ session }) {
     }
     const id = `g_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const cleanDe = clip(de.trim(), LIMIT.de);
-    const w = { de: cleanDe, article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), desc: buildDesc(desc, cleanDe), ...(inCards ? {} : { cardOff: true }), ...(inArticle ? {} : { artOff: true }), ...searchFields({ de, ru }) };
+    const w = { de: cleanDe, article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), desc: buildDesc(desc, cleanDe), ...(inCards ? {} : { cardOff: true }), ...(inArticle ? {} : { artOff: true }), ...(inSchreiben ? {} : { spellOff: true }), ...searchFields({ de, ru }) };
     try {
       await dbSet(`global_words/${id}`, w); setWords((prev) => [...prev, { ...w, id }]);
-      setDe(""); setArticle(""); setRu(""); setExample(""); setDesc(""); setImageUrl(""); setArticleTouched(false); setInCards(true); setInArticle(true); flash("✓ Wort hinzugefügt");
+      setDe(""); setArticle(""); setRu(""); setExample(""); setDesc(""); setImageUrl(""); setArticleTouched(false); setInCards(true); setInArticle(true); setInSchreiben(true); flash("✓ Wort hinzugefügt");
       classSync("word-assigned", { wordIds: [id] }).catch(() => {});
       requestPronunciation(id, "global").catch(() => {});
     }
@@ -388,7 +412,7 @@ export function ManageTab({ session }) {
       let de_ = parts[0], art_ = "", ru_ = parts[1] || "", ex_ = parts[2] || "";
       const m = de_.match(/^(der|die|das|ein|eine)\s+(.+)$/i);
       if (m) { art_ = m[1]; de_ = m[2]; }
-      newW.push({ de: clip(de_, LIMIT.de), article: cleanArticle(art_), ru: clip(ru_, LIMIT.ru), example: clip(ex_, LIMIT.example), folderId: folderId || null, imageUrl: null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), ...(inCards ? {} : { cardOff: true }), ...(inArticle ? {} : { artOff: true }), ...searchFields({ de: de_, ru: ru_ }) });
+      newW.push({ de: clip(de_, LIMIT.de), article: cleanArticle(art_), ru: clip(ru_, LIMIT.ru), example: clip(ex_, LIMIT.example), folderId: folderId || null, imageUrl: null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), ...(inCards ? {} : { cardOff: true }), ...(inArticle ? {} : { artOff: true }), ...(inSchreiben ? {} : { spellOff: true }), ...searchFields({ de: de_, ru: ru_ }) });
     }
     if (!newW.length) { flash("⚠ Format: Wort – Übersetzung"); return; }
     const stamp = Date.now();
@@ -662,7 +686,16 @@ export function ManageTab({ session }) {
             >
               <span className="deck-chip-mark">{inArticle ? "✓" : "＋"}</span>🔤 Artikel
             </button>
-            {!inCards && !inArticle && <span className="deck-warn">⚠ In keinem Training</span>}
+            <button
+              type="button"
+              className={`deck-chip spell${inSchreiben ? " on" : ""}`}
+              aria-pressed={inSchreiben}
+              onClick={() => setInSchreiben((v) => !v)}
+              title="Für das Schreibtraining (Wort nach Übersetzung/Beschreibung tippen)"
+            >
+              <span className="deck-chip-mark">{inSchreiben ? "✓" : "＋"}</span>✍️ Schreiben
+            </button>
+            {!inCards && !inArticle && !inSchreiben && <span className="deck-warn">⚠ In keinem Training</span>}
           </div>
 
           <button
@@ -767,6 +800,11 @@ export function ManageTab({ session }) {
                   <button className="bulk-seg-btn on" onClick={() => bulkSetArtikel(false)} title="Ausgewählte Nomen ins Artikel-Training aufnehmen">ein</button>
                   <button className="bulk-seg-btn off" onClick={() => bulkSetArtikel(true)} title="Ausgewählte Nomen vom Artikel-Training ausschließen">aus</button>
                 </div>
+                <div className="bulk-seg">
+                  <span className="bulk-seg-label">✍️ Schreiben</span>
+                  <button className="bulk-seg-btn on" onClick={() => bulkSetSchreiben(false)} title="Ausgewählte Wörter ins Schreibtraining aufnehmen">ein</button>
+                  <button className="bulk-seg-btn off" onClick={() => bulkSetSchreiben(true)} title="Ausgewählte Wörter vom Schreibtraining ausschließen">aus</button>
+                </div>
               </div>
               <div className="bulk-row bulk-row-end">
                 <button className="bulk-del" onClick={bulkDeleteSelected} title="Ausgewählte löschen">Löschen</button>
@@ -840,6 +878,7 @@ export function ManageTab({ session }) {
                       <option value="">📂 Kein Ordner</option>
                       {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
                     </select>
+                    <div className="deck-chips">
                     <button
                       type="button"
                       className={`deck-chip${w.cardOff === true ? "" : " on"}`}
@@ -862,9 +901,20 @@ export function ManageTab({ session }) {
                         <span className="deck-chip-mark">{w.artOff === true ? "" : "✓"}</span>🔤 Artikel
                       </button>
                     )}
-                    {w.cardOff === true && (w.artOff === true || !resolveArticleAnswer(w)) && (
+                    <button
+                      type="button"
+                      className={`deck-chip spell${w.spellOff === true ? "" : " on"}`}
+                      onClick={() => toggleSchreiben(w)}
+                      title={w.spellOff === true
+                        ? "Nicht im Schreibtraining — zum Aktivieren tippen"
+                        : "Im Schreibtraining — zum Ausschließen tippen"}
+                    >
+                      <span className="deck-chip-mark">{w.spellOff === true ? "" : "✓"}</span>✍️ Schreiben
+                    </button>
+                    {w.cardOff === true && w.spellOff === true && (w.artOff === true || !resolveArticleAnswer(w)) && (
                       <span className="deck-warn" title="Dieses Wort erscheint in keinem Training">⚠ Kein Training</span>
                     )}
+                    </div>
                   </div>
                 </div>
                 <div className="wi-actions">

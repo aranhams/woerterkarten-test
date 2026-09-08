@@ -4,7 +4,7 @@ import { requestLogger } from "./_log.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { recomputeDenorm, genUniqueJoinCode, makeCode, syncWordManifests, dropFromManifests } from "./_classes.js";
 import { resolveUid } from "./_users.js";
-import { summarizeStudent, summarizeActivity, summarizeTrend, dayKey, effLevel, isDueEff, isHardFor, resolveArticleAnswer, summarizeHardArticles, MASTERY_LEVEL } from "./_progress.js";
+import { summarizeStudent, summarizeActivity, summarizeTrend, dayKey, effLevel, isDueEff, isHardFor, resolveArticleAnswer, summarizeHardArticles, isHardSpell, summarizeHardSpelling, MASTERY_LEVEL } from "./_progress.js";
 import { MASTERY_LEVEL as COLL_MASTERY_LEVEL } from "./_collocations.js";
 import { isValidDuration, computeExpiresAt, repeatIsLive, normalizeRepeatEntry } from "../shared/repeat.js";
 
@@ -401,6 +401,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
         ...roster.map((u) => db.doc(`users/${u}/meta/activity`)),
         ...roster.map((u) => db.doc(`users/${u}/meta/collocationProgress`)),
         ...roster.map((u) => db.doc(`users/${u}/meta/articleProgress`)),
+        ...roster.map((u) => db.doc(`users/${u}/meta/spellProgress`)),
       ];
       const snaps = n ? await db.getAll(...refs) : [];
       const personalSnaps = n
@@ -419,6 +420,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
       const hardPrivate = [];
       const folderRows = new Map();
       const articleProgressByUid = new Map();
+      const spellProgressByUid = new Map();
       for (let i = 0; i < n; i++) {
         const uid = roster[i];
         const progSnap = snaps[i];
@@ -426,6 +428,7 @@ async function dispatch({ db, auth, user, action, body, L }) {
         const actSnap = snaps[2 * n + i];
         const collocSnap = snaps[3 * n + i];
         const articleSnap = snaps[4 * n + i];
+        const spellSnap = snaps[5 * n + i];
         const progressData = (progSnap && progSnap.exists ? progSnap.data()?.data : null) || {};
         const username = (userSnap && userSnap.exists ? userSnap.data()?.username : null) || uid.slice(0, 6);
         const actData = (actSnap && actSnap.exists) ? actSnap.data() : null;
@@ -466,12 +469,30 @@ async function dispatch({ db, auth, user, action, body, L }) {
           else if (isHardFor(w, p)) articleHard++;
         }
 
+        const spellData = (spellSnap && spellSnap.exists ? spellSnap.data()?.data : null) || {};
+        spellProgressByUid.set(uid, spellData);
+        let spellTotal = 0, spellHard = 0, spellOk = 0;
+        const spellHardWords = [];
+        for (const [wordId, p] of Object.entries(spellData)) {
+          if (!p) continue;
+          spellTotal++;
+          if (isHardSpell(p)) {
+            spellHard++;
+            const w = wordById.get(wordId) || {};
+            spellHardWords.push({ wordId, de: w.de || "", article: w.article || "", m: p.m || 0, nm: p.nm || 0, lastWrong: p.lastWrong || "" });
+          } else if ((p.nm || 0) === 0) {
+            spellOk++;
+          }
+        }
+        spellHardWords.sort((a, b) => b.nm - a.nm || (a.de || "").localeCompare(b.de || ""));
+
         rows.push({
           uid, username, ...summarizeStudent(cardAssigned, progressData, now),
           streak: act.current, reviews30: act.reviews, correct30: act.correct,
           trendDelta: trend.delta, trendSamples: trend.samples,
           collocTotal, collocHard, collocMastered, collocHardWords,
           articleTotal, articleHard, articleMastered,
+          spellTotal, spellHard, spellOk, spellHardWords,
         });
 
         for (const [wordId, p] of Object.entries(progressData)) {
@@ -549,9 +570,10 @@ async function dispatch({ db, auth, user, action, body, L }) {
         .slice(0, 20);
 
       const hardArticles = summarizeHardArticles(wordById, articleProgressByUid);
+      const hardSpelling = summarizeHardSpelling(wordById, spellProgressByUid);
 
       L.log("info", "class.progress-report", { uid: user.uid, classId: id, rosterSize: rosterAll.length, words: words.length });
-      const payload = { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, hardPrivateWords, hardArticles, readiness };
+      const payload = { generatedAt: now, class: { id, name: data.name || "", icon: data.icon || "" }, rosterSize: rosterAll.length, truncated, aggregate, students: rows, hardWords, hardPrivateWords, hardArticles, hardSpelling, readiness };
       reportCache.set(id, { at: Date.now(), payload });
       return payload;
     }
@@ -565,11 +587,12 @@ async function dispatch({ db, auth, user, action, body, L }) {
       const corpus = await loadClassCorpus(db, data);
       const assigned = corpus.words.filter((w) => Array.isArray(w.memberUids) && w.memberUids.includes(uid) && w.cardOff !== true);
       const folders = Object.fromEntries([...corpus.folderMeta].map(([fid, f]) => [fid, { name: f.name || "Ordner", icon: f.icon || "📁" }]));
-      const [snap, actSnap, privWordsSnap, privFoldersSnap] = await Promise.all([
+      const [snap, actSnap, privWordsSnap, privFoldersSnap, spellSnap] = await Promise.all([
         db.doc(`users/${uid}/meta/progress`).get(),
         db.doc(`users/${uid}/meta/activity`).get(),
         db.collection(`users/${uid}/words`).limit(PRIVATE_CAP).get(),
         db.collection(`users/${uid}/folders`).limit(PRIVATE_CAP).get(),
+        db.doc(`users/${uid}/meta/spellProgress`).get(),
       ]);
       const progressData = (snap.exists ? snap.data()?.data : null) || {};
       const activity = (actSnap.exists ? actSnap.data()?.days : null) || {};
@@ -583,7 +606,16 @@ async function dispatch({ db, auth, user, action, body, L }) {
       const wordRows = assigned.map(rowFor).sort(byLabel);
       const privateWords = privWordsSnap.docs.map((d) => rowFor({ id: d.id, ...d.data() })).sort(byLabel);
       const privateFolders = Object.fromEntries(privFoldersSnap.docs.map((d) => [d.id, { name: d.data().name || "Ordner", icon: d.data().icon || "📁" }]));
-      return { words: wordRows, folders, activity, privateWords, privateFolders };
+      const spellData = (spellSnap.exists ? spellSnap.data()?.data : null) || {};
+      const spellWordInfo = new Map(corpus.words.map((w) => [w.id, w]));
+      const spelling = Object.entries(spellData)
+        .filter(([, p]) => p)
+        .map(([wordId, p]) => {
+          const w = spellWordInfo.get(wordId) || {};
+          return { wordId, de: w.de || "", article: w.article || "", attempts: p.a || 0, misses: p.m || 0, nm: p.nm || 0, hard: isHardSpell(p), lastWrong: p.lastWrong || "" };
+        })
+        .sort((a, b) => b.nm - a.nm || (a.de || "").localeCompare(b.de || ""));
+      return { words: wordRows, folders, activity, privateWords, privateFolders, spelling };
     }
 
     case "start-repeat": {
