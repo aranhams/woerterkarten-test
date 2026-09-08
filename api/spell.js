@@ -38,6 +38,7 @@ function toCard(id, w) {
   return {
     id,
     de: String(w.de || ""),
+    article: String(w.article || ""),
     folderId: w.folderId ?? null,
     deRev: w.deRev || 0,
     t: w.t || null,

@@ -16,6 +16,7 @@ export function buildSpellCards(cards) {
     out.push({
       id: w.id,
       de,
+      article: String(w.article || ""),
       folderId: w.folderId ?? null,
       deRev: w.deRev || 0,
       t: w.t || null,
@@ -80,6 +81,26 @@ export function spellDiff(guess, target) {
   while (i < n) { ops.push({ ch: g[i], status: "extra" }); i++; }
   while (j < m) { ops.push({ ch: t[j], status: "missing" }); j++; }
   return coalesce(ops);
+}
+
+export function segChar(seg) {
+  return seg && seg.status !== "match" && /\s/.test(seg.ch) ? "␣" : seg.ch;
+}
+
+const ARTICLE_RE = /^(der|die|das|ein|eine)\s+([\s\S]+)$/i;
+
+export function splitGuess(guess) {
+  const g = norm(guess);
+  const m = g.match(ARTICLE_RE);
+  if (m && norm(m[2])) return { article: m[1], word: norm(m[2]) };
+  return { article: null, word: g };
+}
+
+export function analyzeSpelling(guess, word, article) {
+  const target = norm(word);
+  const hasArticle = norm(article).length > 0;
+  const typedWord = hasArticle ? splitGuess(guess).word : norm(guess);
+  return { correct: target.length > 0 && typedWord === target, segments: spellDiff(typedWord, target) };
 }
 
 export function recordSpell(prev, correct, guess, now) {

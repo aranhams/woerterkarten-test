@@ -3,7 +3,7 @@ import { FOLDER_PAGE } from "../../lib/constants";
 import { getProgressReport, getStudentProgressDetail, getWeakCollocations } from "../../lib/api";
 import { loadAllClasses } from "../../data/loaders";
 import { clearDataCache } from "../../data/cache";
-import { spellDiff } from "../../lib/spell";
+import { analyzeSpelling, segChar } from "../../lib/spell";
 
 const C = { sicher: "#3f8a5c", fastSicher: "#59b98c", learning: "#c8773a", neu: "#cbc8be", struggle: "#c0392b" };
 
@@ -101,17 +101,17 @@ function Legend({ dist }) {
   </div>;
 }
 
-function SpellMiss({ guess, target }) {
+function SpellMiss({ guess, de, article }) {
   if (!guess) return null;
   return (
     <span translate="no" style={{ fontFamily: "'SFMono-Regular',ui-monospace,monospace", letterSpacing: ".5px" }}>
-      {spellDiff(guess, target).map((seg, i) => (
+      {analyzeSpelling(guess, de, article).segments.map((seg, i) => (
         <span key={i} style={{
           color: seg.status === "match" ? C.sicher : seg.status === "missing" ? "var(--ink-soft)" : C.struggle,
           textDecoration: seg.status === "missing" ? "underline" : seg.status === "extra" ? "line-through" : "none",
           opacity: seg.status === "missing" ? 0.65 : 1,
           fontWeight: seg.status === "match" ? 400 : 700,
-        }}>{seg.ch}</span>
+        }}>{segChar(seg)}</span>
       ))}
     </span>
   );
@@ -676,7 +676,7 @@ export function ProgressTab({ session }) {
                     {r.spellHardWords.map((w) => (
                       <span key={w.wordId} style={{ color: "var(--ink-soft)", background: "var(--ivory-dark)", padding: "2px 8px", borderRadius: 12 }}>
                         {w.de || w.wordId}
-                        {w.lastWrong && <> — <SpellMiss guess={w.lastWrong} target={w.de} /></>}
+                        {w.lastWrong && <> — <SpellMiss guess={w.lastWrong} de={w.de} article={w.article} /></>}
                         <span style={{ color: C.struggle, marginLeft: 5, fontWeight: 700 }}>×{w.nm}</span>
                       </span>
                     ))}
@@ -951,7 +951,7 @@ function DetailPanel({ data, loading }) {
                 </span>
                 {s.lastWrong && (
                   <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
-                    zuletzt: <SpellMiss guess={s.lastWrong} target={s.de} />
+                    zuletzt: <SpellMiss guess={s.lastWrong} de={s.de} article={s.article} />
                   </span>
                 )}
                 <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}

@@ -6,7 +6,7 @@ import { LIMIT } from "../../lib/constants";
 import { loadVisibleFolders, loadAllClasses } from "../../data/loaders";
 import { loadSpellProgress, saveOneSpellProgress } from "../../data/spellProgress";
 import {
-  buildSpellCards, buildSpellDeck, isSpellCorrect, spellDiff, recordSpell, hasDescription,
+  buildSpellCards, buildSpellDeck, analyzeSpelling, recordSpell, hasDescription, segChar,
 } from "../../lib/spell";
 
 export function SpellTab({ session }) {
@@ -127,8 +127,8 @@ export function SpellTab({ session }) {
 
   function check() {
     if (!current || solved) return;
-    const correct = isSpellCorrect(guess, current.de);
-    setChecked({ segs: spellDiff(guess, current.de), correct });
+    const { correct, segments } = analyzeSpelling(guess, current.de, current.article);
+    setChecked({ segs: segments, correct });
     if (!firstCheckDone) {
       setFirstCheckDone(true);
       setRound((s) => ({ answered: s.answered + 1, correct: s.correct + (correct ? 1 : 0) }));
@@ -263,6 +263,7 @@ export function SpellTab({ session }) {
         </div>
 
         <div className="spell-input-row">
+          {current.article && <span className="spell-article" translate="no">{current.article}</span>}
           <input
             ref={inputRef}
             className="spell-input"
@@ -270,7 +271,7 @@ export function SpellTab({ session }) {
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            placeholder="Wort auf Deutsch schreiben…"
+            placeholder="Wort schreiben…"
             maxLength={LIMIT.de}
             value={guess}
             disabled={solved}
@@ -282,13 +283,14 @@ export function SpellTab({ session }) {
 
         {checked && (
           <div className="spell-result" translate="no">
+            {current.article && <span className="spell-article-inline">{current.article} </span>}
             {checked.segs.map((seg, i) => (
               <span
                 key={i}
                 className={seg.status === "match" ? "spell-ok" : seg.status === "missing" ? "spell-missing" : "spell-bad"}
                 title={seg.status === "wrong" && seg.expected ? `erwartet: ${seg.expected}` : undefined}
               >
-                {seg.ch}
+                {segChar(seg)}
               </span>
             ))}
           </div>
@@ -303,7 +305,9 @@ export function SpellTab({ session }) {
             }}>
               {solved ? "✓ Richtig geschrieben!" : "✕ Noch nicht ganz"}
               {!solved && reveal && (
-                <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)", marginTop: 6 }}>{current.de}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)", marginTop: 6 }}>
+                  {current.article && <span style={{ color: "var(--accent)", fontStyle: "italic" }}>{current.article} </span>}{current.de}
+                </div>
               )}
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 14, flexWrap: "wrap" }}>
