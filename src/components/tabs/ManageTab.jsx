@@ -767,7 +767,7 @@ export function ManageTab({ session }) {
             >
               <span className="deck-chip-mark">{inVerbindungen ? "✓" : "＋"}</span>🔗 Verbindungen
             </button>
-            {!inCards && !inArticle && !inSchreiben && <span className="deck-warn">⚠ In keinem Training</span>}
+            {!inCards && !inArticle && !inSchreiben && !inVerbindungen && <span className="deck-warn">⚠ In keinem Training</span>}
           </div>
 
           <button
