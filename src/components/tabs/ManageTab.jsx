@@ -4,10 +4,11 @@ import { db } from "../../lib/firebase";
 import { LIMIT, FOLDER_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { clip, cleanArticle, validImageUrl, cldImg } from "../../lib/format";
 import { validateWordInput, germanChanged, nextDeRev, searchFields, buildDesc, descFresh } from "../../lib/word";
-import { classSync, requestPronunciation, resyncPronunciation, purgeCollocationSets, lookupGenus } from "../../lib/api";
+import { classSync, requestPronunciation, resyncPronunciation, purgeCollocationSets, lookupGenus, collocationSync } from "../../lib/api";
 import { pronState } from "../../lib/pron";
 import { resolveArticleAnswer, isArticleWord } from "../../lib/article";
 import { loadGlobalFolders } from "../../data/loaders";
+import { loadCollocationSet } from "../../data/collocations";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
@@ -58,8 +59,8 @@ export function ManageTab({ session }) {
   const [de, setDe] = useState(""); const [article, setArticle] = useState("");
   const [ru, setRu] = useState(""); const [example, setExample] = useState("");
   const [desc, setDesc] = useState("");
-  const [inCards, setInCards] = useState(true); const [inArticle, setInArticle] = useState(true);
-  const [inSchreiben, setInSchreiben] = useState(true);
+  const [inCards, setInCards] = useState(true); const [inArticle, setInArticle] = useState(false);
+  const [inSchreiben, setInSchreiben] = useState(false); const [inVerbindungen, setInVerbindungen] = useState(false);
   const [onlyArticle, setOnlyArticle] = useState(false);
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
   const [bulk, setBulk] = useState(""); const [msg, setMsg] = useState("");
@@ -92,6 +93,9 @@ export function ManageTab({ session }) {
   const [showOptions, setShowOptions] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [selectedWords, setSelectedWords] = useState(new Set());
+  const [collocSets, setCollocSets] = useState({});
+  const [collocBusy, setCollocBusy] = useState(() => new Set());
+  const collocRefreshRef = useRef(false);
 
   const words = page ? page.rows : [];
 
@@ -105,6 +109,40 @@ export function ManageTab({ session }) {
       setFolders(gf.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))); setPage(first); setTotal(n); setLoading(false);
     })();
   }, []);
+
+  useEffect(() => {
+    if (!page) return;
+    const needed = windowRows(page, pageIdx, WORD_PAGE_SERVER).filter((w) => collocSets[w.id] === undefined);
+    if (!needed.length) return;
+    let cancelled = false;
+    (async () => {
+      const loaded = await Promise.all(needed.map((w) => loadCollocationSet(w.id).catch(() => null)));
+      if (cancelled) return;
+      setCollocSets((prev) => {
+        const next = { ...prev };
+        needed.forEach((w, i) => { next[w.id] = loaded[i] || null; });
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [page, pageIdx]);
+
+  useEffect(() => {
+    if (manageSection !== "words") { collocRefreshRef.current = true; return; }
+    if (!collocRefreshRef.current) return;
+    collocRefreshRef.current = false;
+    if (!page) { setCollocSets({}); return; }
+    let cancelled = false;
+    (async () => {
+      const vis = windowRows(page, pageIdx, WORD_PAGE_SERVER);
+      const loaded = await Promise.all(vis.map((w) => loadCollocationSet(w.id).catch(() => null)));
+      if (cancelled) return;
+      const fresh = {};
+      vis.forEach((w, i) => { fresh[w.id] = loaded[i] || null; });
+      setCollocSets(fresh);
+    })();
+    return () => { cancelled = true; };
+  }, [manageSection]);
 
   async function goto(i) {
     if (!page || busy || i < 0) return;
@@ -249,6 +287,22 @@ export function ManageTab({ session }) {
       setWords((prev) => prev.map((x) => (x.id === w.id ? { ...x, spellOff: next, updatedAt: Date.now(), updatedBy: session.uid } : x)));
       flashRow(w.id, next ? "✓ Schreibtraining aus" : "✓ Schreibtraining ein");
     } catch { flashRow(w.id, "⚠ Keine Berechtigung."); }
+  }
+
+  async function toggleVerbindungen(w) {
+    if (collocBusy.has(w.id) || collocSets[w.id] === undefined) return;
+    const next = collocSets[w.id]?.optedIn !== true;
+    setCollocBusy((s) => new Set(s).add(w.id));
+    setCollocSets((s) => ({ ...s, [w.id]: { ...(s[w.id] || {}), optedIn: next } }));
+    try {
+      await collocationSync(next ? "opt-in" : "opt-out", { wordId: w.id });
+      flashRow(w.id, next ? "✓ Für Verbindungen aktiviert" : "✓ Aus Verbindungen entfernt");
+    } catch {
+      setCollocSets((s) => ({ ...s, [w.id]: { ...(s[w.id] || {}), optedIn: !next } }));
+      flashRow(w.id, "⚠ Keine Berechtigung.");
+    } finally {
+      setCollocBusy((s) => { const n = new Set(s); n.delete(w.id); return n; });
+    }
   }
 
   async function bulkSetCard(off) {
@@ -396,7 +450,11 @@ export function ManageTab({ session }) {
     const w = { de: cleanDe, article: cleanArticle(article), ru: clip(ru.trim(), LIMIT.ru), example: clip(example.trim(), LIMIT.example), folderId: folderId || null, imageUrl: imageUrl || null, addedBy: "Lehrerin", source: "global", memberUids: folderMembersFor(folderId), desc: buildDesc(desc, cleanDe), ...(inCards ? {} : { cardOff: true }), ...(inArticle ? {} : { artOff: true }), ...(inSchreiben ? {} : { spellOff: true }), ...searchFields({ de, ru }) };
     try {
       await dbSet(`global_words/${id}`, w); setWords((prev) => [...prev, { ...w, id }]);
-      setDe(""); setArticle(""); setRu(""); setExample(""); setDesc(""); setImageUrl(""); setArticleTouched(false); setInCards(true); setInArticle(true); setInSchreiben(true); flash("✓ Wort hinzugefügt");
+      if (inVerbindungen) {
+        collocationSync("opt-in", { wordId: id }).catch(() => {});
+        setCollocSets((s) => ({ ...s, [id]: { optedIn: true } }));
+      }
+      setDe(""); setArticle(""); setRu(""); setExample(""); setDesc(""); setImageUrl(""); setArticleTouched(false); setInCards(true); setInArticle(false); setInSchreiben(false); setInVerbindungen(false); flash("✓ Wort hinzugefügt");
       classSync("word-assigned", { wordIds: [id] }).catch(() => {});
       requestPronunciation(id, "global").catch(() => {});
     }
@@ -427,6 +485,11 @@ export function ManageTab({ session }) {
         await batch.commit();
       }
       setWords((prev) => [...prev, ...rows]);
+      if (inVerbindungen) {
+        const ids = rows.map((r) => r.id);
+        collocationSync("bulk-opt-in-ids", { wordIds: ids }).catch(() => {});
+        setCollocSets((s) => { const n = { ...s }; ids.forEach((id) => { n[id] = { optedIn: true }; }); return n; });
+      }
       setBulk(""); flash(`✓ ${rows.length} Wörter hinzugefügt`);
       classSync("word-assigned", { wordIds: rows.map((r) => r.id) }).catch(() => {});
       syncPron(rows.map((r) => r.id), { announce: false });
@@ -695,6 +758,15 @@ export function ManageTab({ session }) {
             >
               <span className="deck-chip-mark">{inSchreiben ? "✓" : "＋"}</span>✍️ Schreiben
             </button>
+            <button
+              type="button"
+              className={`deck-chip colloc${inVerbindungen ? " on" : ""}`}
+              aria-pressed={inVerbindungen}
+              onClick={() => setInVerbindungen((v) => !v)}
+              title="Für die Wortverbindungen aktivieren — Kandidaten danach im Verbindungen-Bereich erzeugen/prüfen"
+            >
+              <span className="deck-chip-mark">{inVerbindungen ? "✓" : "＋"}</span>🔗 Verbindungen
+            </button>
             {!inCards && !inArticle && !inSchreiben && <span className="deck-warn">⚠ In keinem Training</span>}
           </div>
 
@@ -910,6 +982,19 @@ export function ManageTab({ session }) {
                         : "Im Schreibtraining — zum Ausschließen tippen"}
                     >
                       <span className="deck-chip-mark">{w.spellOff === true ? "" : "✓"}</span>✍️ Schreiben
+                    </button>
+                    <button
+                      type="button"
+                      className={`deck-chip colloc${collocSets[w.id]?.optedIn === true ? " on" : ""}`}
+                      onClick={() => toggleVerbindungen(w)}
+                      disabled={collocBusy.has(w.id) || collocSets[w.id] === undefined}
+                      title={collocSets[w.id] === undefined
+                        ? "Lädt…"
+                        : collocSets[w.id]?.optedIn === true
+                          ? "In den Wortverbindungen — zum Deaktivieren tippen (Kandidaten im Verbindungen-Bereich prüfen)"
+                          : "Nicht in den Wortverbindungen — zum Aktivieren tippen"}
+                    >
+                      <span className="deck-chip-mark">{collocSets[w.id]?.optedIn === true ? "✓" : ""}</span>🔗 Verbindungen
                     </button>
                     {w.cardOff === true && w.spellOff === true && (w.artOff === true || !resolveArticleAnswer(w)) && (
                       <span className="deck-warn" title="Dieses Wort erscheint in keinem Training">⚠ Kein Training</span>

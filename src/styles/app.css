@@ -320,6 +320,9 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 /* Schreiben (spelling trainer) */
 .deck-chip.spell.on{background:#eef0fb;border-color:#5b6cc0;color:#4655a8;}
 .deck-chip.spell:hover{border-color:#5b6cc0;}
+.deck-chip.colloc.on{background:#e5f3f1;border-color:#2a9d8f;color:#227d72;}
+.deck-chip.colloc:hover{border-color:#2a9d8f;}
+.deck-chip:disabled{opacity:.55;cursor:default;}
 .spell-prompt{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;}
 .spell-trans{font-family:'Inter',sans-serif;font-size:26px;font-weight:600;color:var(--ink);line-height:1.3;text-align:center;}
 .spell-desc{font-family:'Lora',serif;font-size:19px;font-style:italic;color:var(--ink);line-height:1.5;text-align:center;}
