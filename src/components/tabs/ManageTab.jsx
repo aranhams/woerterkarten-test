@@ -996,7 +996,7 @@ export function ManageTab({ session }) {
                     >
                       <span className="deck-chip-mark">{collocSets[w.id]?.optedIn === true ? "✓" : ""}</span>🔗 Verbindungen
                     </button>
-                    {w.cardOff === true && w.spellOff === true && (w.artOff === true || !resolveArticleAnswer(w)) && (
+                    {w.cardOff === true && w.spellOff === true && (w.artOff === true || !resolveArticleAnswer(w)) && collocSets[w.id] !== undefined && collocSets[w.id]?.optedIn !== true && (
                       <span className="deck-warn" title="Dieses Wort erscheint in keinem Training">⚠ Kein Training</span>
                     )}
                     </div>
