@@ -558,8 +558,9 @@ export function ManageTab({ session }) {
     try {
       await dbDelete(`global_words/${id}`);
       setWords((prev) => prev.filter((w) => w.id !== id));
+      setCollocSets((s) => { const n = { ...s }; delete n[id]; return n; });
       classSync("cleanup", { wordId: id, memberUids }).catch(() => {});
-      purgeCollocationSets(id).catch(() => {});
+      await purgeCollocationSets(id).catch((e) => { console.warn("[colloc] purge-sets failed", id, e?.message || e); });
     } catch { flash("⚠ Keine Berechtigung."); }
   }
   async function deleteFolder(id) {
