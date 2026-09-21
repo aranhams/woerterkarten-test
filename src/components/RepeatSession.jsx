@@ -7,6 +7,7 @@ import { translateWord, getRepeatQueue } from "../lib/api";
 import { cachePron } from "../data/loaders";
 import { usePronunciation } from "../data/usePron";
 import { SpokenWord } from "./Pronunciation";
+import { CardNav, useCardNavKeys } from "./CardNav";
 
 // A repeat session renders the normal flashcards but persists NOTHING: it never
 // touches meta/progress or meta/activity, so a student's SRS state and stats are
@@ -76,6 +77,10 @@ export function RepeatSession({ session, repeat, onExit }) {
     setIdx((i) => i + 1);
   }
 
+  const goPrev = () => { if (idx > 0) { setRevealed(false); setIdx(idx - 1); } };
+  const goNext = () => { if (idx < deck.length - 1) { setRevealed(false); setIdx(idx + 1); } };
+  useCardNavKeys(goPrev, goNext, [idx, deck.length]);
+
   const langLabel = LANGUAGES.find((l) => l.code === session.lang)?.label?.split(" ")[0] || "Muttersprache";
   const front = card ? (direction === "de2ru" ? { hint: "Deutsch → ?", article: card.article, word: card.de, isDE: true } : { hint: `${langLabel} → ?`, word: card.ru || "…", isDE: false }) : null;
   const back = card ? (direction === "de2ru" ? { word: card.ru, isDE: false } : { article: card.article, word: card.de, isDE: true }) : null;
@@ -115,8 +120,7 @@ export function RepeatSession({ session, repeat, onExit }) {
         <span style={{ color: "var(--sage-light)", padding: "0 2px" }}>⇄</span>
         <button className={`dir-btn${direction === "ru2de" ? " active" : ""}`} onClick={() => setDir("ru2de")}>{langLabel}</button>
       </div>
-      <div className="dsc-nav"><span className="dsc-nav-pos">{idx + 1} / {deck.length}</span></div>
-      <div className="fc-wrap">
+      <CardNav pos={idx} len={deck.length} onPrev={goPrev} onNext={goNext}>
         <div className="fc" translate="no" onClick={() => !revealed && setRevealed(true)}>
           <div className="fc-folder">🔁 {repeat.label || "Wiederholung"}</div>
           {card.imageUrl && validImageUrl(card.imageUrl) && <img src={cldImg(card.imageUrl, 600)} className="fc-img" alt="" decoding="async" />}
@@ -133,7 +137,7 @@ export function RepeatSession({ session, repeat, onExit }) {
             {card.example && <div className="fc-example">„{card.example}"</div>}
           </>) : <div className="fc-tap">Tippe, um {direction === "de2ru" ? "die Übersetzung" : "das deutsche Wort"} zu sehen</div>}
         </div>
-      </div>
+      </CardNav>
       {revealed && <div className="ans-btns">
         <button className="btn-forgot" onClick={() => advance(true)}>😬 Nochmal</button>
         <button className="btn-knew" onClick={() => advance(false)}>✓ Weiter</button>

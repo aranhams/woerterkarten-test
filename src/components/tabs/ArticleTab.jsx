@@ -8,6 +8,7 @@ import { loadArticleProgress, saveOneArticleProgress } from "../../data/articleP
 import {
   buildArticleCards, buildArticleDeck, selectDueArticles, answerArticle, ARTICLE_OPTIONS,
 } from "../../lib/article";
+import { CardNav, useCardNavKeys } from "../CardNav";
 
 export function ArticleTab({ session }) {
   const isTeacher = session.isTeacher;
@@ -143,6 +144,15 @@ export function ArticleTab({ session }) {
     setIdx((i) => i + 1);
   }
 
+  function goToCard(n) {
+    setPicked(null);
+    setShowTrans(false);
+    setIdx(n);
+  }
+  const goPrev = () => { if (idx > 0) goToCard(idx - 1); };
+  const goNext = () => { if (idx < deck.length - 1) goToCard(idx + 1); };
+  useCardNavKeys(goPrev, goNext, [idx, deck.length]);
+
   function restart() {
     setDeck(buildArticleDeck(isTeacher ? scopedCards.map((c) => ({ ...c, deRev: -1 })) : cards, isTeacher ? {} : progress));
     setIdx(0);
@@ -231,11 +241,8 @@ export function ArticleTab({ session }) {
         )}
         <button className="btn-add" style={{ marginTop: 14 }} onClick={restart}>Nochmal üben</button>
       </div>
-    ) : current ? (<>
-      <div className="dsc-nav">
-        <span className="dsc-nav-pos">{idx + 1} / {deck.length}</span>
-      </div>
-
+    ) : current ? (
+      <CardNav pos={idx} len={deck.length} onPrev={goPrev} onNext={goNext}>
       <div className="colloc-card">
         <div className="colloc-prompt">
           <div className="colloc-hint">Welcher Artikel?</div>
@@ -309,7 +316,8 @@ export function ArticleTab({ session }) {
           </div>
         )}
       </div>
-    </>) : (
+      </CardNav>
+    ) : (
       <div className="empty" style={{ padding: 40 }}>
         <div className="emoji">🎉</div>
         <h3>Alles geübt!</h3>

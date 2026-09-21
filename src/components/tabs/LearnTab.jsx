@@ -19,6 +19,7 @@ const TEACHER_PREVIEW = { level: INTERVALS.length - 1, due: 0 };
 export function LearnTab({ session }) {
   const [revealed, setRevealed] = useState(false);
   const [idx, setIdx] = useState(0);
+  const [slideDir, setSlideDir] = useState(0);
   const [direction, setDirection] = useState(() => localStorage.getItem("dw_dir") || "de2ru");
   const [filterFolder, setFilterFolder] = useState(session.isTeacher ? "" : "all");
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -39,6 +40,8 @@ export function LearnTab({ session }) {
     try { return new Set(JSON.parse(localStorage.getItem("dw_repeat_dismissed") || "[]")); } catch { return new Set(); }
   });
   const fetching = useRef(false);
+  const touchStartRef = useRef(null);
+  const swipedRef = useRef(false);
 
   useEffect(() => () => { flushActivity(); }, []);
 
@@ -179,6 +182,27 @@ export function LearnTab({ session }) {
       : dueCards.length;
   const rawCard = dueCards[idx % Math.max(dueCards.length, 1)] || null;
   const card = rawCard && rawCard.source === "global" ? withTrans(rawCard, session.lang) : rawCard;
+  const deckLen = dueCards.length;
+  const pos = deckLen ? idx % deckLen : 0;
+  const gotoCard = (nextPos, dir) => { setSlideDir(dir); setRevealed(false); setIdx(nextPos); };
+  const goPrev = () => { if (pos > 0) gotoCard(pos - 1, -1); };
+  const goNext = () => { if (pos < deckLen - 1) gotoCard(pos + 1, 1); };
+  const onCardTouchStart = (e) => {
+    swipedRef.current = false;
+    const t = e.changedTouches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const onCardTouchEnd = (e) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x, dy = t.clientY - start.y;
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      swipedRef.current = true;
+      if (dx < 0) goNext(); else goPrev();
+    }
+  };
 
   async function ensureTranslation(c) {
     if (!c || c.source !== "global" || c.ru || translatedIds.has(c.id)) return;
@@ -203,6 +227,17 @@ export function LearnTab({ session }) {
   }
 
   usePronunciation(card, session, applyPron);
+
+  useEffect(() => {
+    if (repeatSession) return undefined;
+    function onKey(e) {
+      if (e.target.closest?.('input, select, textarea, [contenteditable="true"]')) return;
+      if (e.key === "ArrowRight") { e.preventDefault(); goNext(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pos, deckLen, repeatSession]);
 
   async function answer(knew) {
     if (!card) return;
@@ -324,8 +359,13 @@ export function LearnTab({ session }) {
         <p style={{ fontSize: 14 }}>{total === 0 ? "Die Lehrerin fügt bald Wörter hinzu." : "Komm später wieder zurück."}</p>
       </div>
     ) : (<>
-      <div className="fc-wrap">
-        <div className="fc" translate="no" onClick={() => !revealed && setRevealed(true)}>
+      <div className="fc-pos" aria-live="polite" aria-atomic="true">{deckLen ? pos + 1 : 0} / {deckLen}</div>
+      <div className="fc-stage">
+        <button type="button" className="fc-nav-btn" onClick={goPrev} disabled={pos <= 0} aria-label="Vorherige Karte">‹</button>
+        <div className="fc-wrap">
+          <div key={card.id} className={`fc ${slideDir < 0 ? "fc-in-left" : slideDir > 0 ? "fc-in-right" : "fc-in"}`} translate="no"
+            onTouchStart={onCardTouchStart} onTouchEnd={onCardTouchEnd} onTouchCancel={() => { touchStartRef.current = null; }}
+            onClick={() => { if (swipedRef.current) { swipedRef.current = false; return; } if (!revealed) setRevealed(true); }}>
           {cardFolder && <div className="fc-folder">{cardFolder.icon} {cardFolder.name}</div>}
           <div className="fc-lvl">{lvlEmoji(progressOf(card)?.level)}</div>
           {card.imageUrl && validImageUrl(card.imageUrl) && <img src={cldImg(card.imageUrl, 600)} className="fc-img" alt="" decoding="async" />}
@@ -341,7 +381,9 @@ export function LearnTab({ session }) {
               : <div className="fc-ru">{back.word || <span style={{ color: "#ccc", fontSize: 14 }}>⏳ Wird übersetzt…</span>}</div>}
             {card.example && <div className="fc-example">„{card.example}"</div>}
           </>) : <div className="fc-tap">Tippe, um {direction === "de2ru" ? "die Übersetzung" : "das deutsche Wort"} zu sehen</div>}
+          </div>
         </div>
+        <button type="button" className="fc-nav-btn" onClick={goNext} disabled={pos >= deckLen - 1} aria-label="Nächste Karte">›</button>
       </div>
       {revealed && <div className="ans-btns">
         <button className="btn-forgot" onClick={() => answer(false)}>😬 Nochmal</button>

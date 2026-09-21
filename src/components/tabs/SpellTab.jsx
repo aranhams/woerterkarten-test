@@ -8,6 +8,7 @@ import { loadSpellProgress, saveOneSpellProgress } from "../../data/spellProgres
 import {
   buildSpellCards, buildSpellDeck, analyzeSpelling, recordSpell, hasDescription, segChar,
 } from "../../lib/spell";
+import { CardNav, useCardNavKeys } from "../CardNav";
 
 export function SpellTab({ session }) {
   const isTeacher = session.isTeacher;
@@ -151,6 +152,10 @@ export function SpellTab({ session }) {
     resetCard(idx + 1);
   }
 
+  const goPrev = () => { if (idx > 0) resetCard(idx - 1); };
+  const goNext = () => { if (idx < deck.length - 1) resetCard(idx + 1); };
+  useCardNavKeys(goPrev, goNext, [idx, deck.length]);
+
   function restart() {
     setDeck(buildSpellDeck(isTeacher && filterFolder ? cards.filter((c) => (c.folderId ?? null) === filterFolder) : cards));
     resetCard(0);
@@ -237,11 +242,8 @@ export function SpellTab({ session }) {
         )}
         <button className="btn-add" style={{ marginTop: 14 }} onClick={restart}>Nochmal üben</button>
       </div>
-    ) : current ? (<>
-      <div className="dsc-nav">
-        <span className="dsc-nav-pos">{idx + 1} / {total}</span>
-      </div>
-
+    ) : current ? (
+      <CardNav pos={idx} len={total} onPrev={goPrev} onNext={goNext}>
       <div className="colloc-card">
         <div className="spell-prompt" translate="no">
           <div className="colloc-hint">{flipped ? "Beschreibung" : "Übersetzung"}</div>
@@ -322,6 +324,7 @@ export function SpellTab({ session }) {
           </div>
         )}
       </div>
-    </>) : null}
+      </CardNav>
+    ) : null}
   </>);
 }
