@@ -7,6 +7,15 @@ import { selectDueQueue } from "./_progress.js";
 const GETALL_CHUNK = 300;
 const DAY_MS = 86_400_000;
 
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 async function buildManifest(db, uid) {
   const snap = await db.collection("global_words").where("memberUids", "array-contains", uid).get();
   const words = snap.docs.map((d) => ({ i: d.id, f: d.data().folderId ?? null, r: d.data().deRev || 0, c: d.data().cardOff === true ? 1 : 0 }));
@@ -83,7 +92,7 @@ export default async function handler(req, res) {
 
     const gen = built ? 1 : (manifestSnap.data().gen || 0);
     const progress = (progressSnap.exists ? progressSnap.data()?.data : null) || {};
-    const { picked, capped, stats } = selectDueQueue(manifest, progress, { folderId });
+    const { picked, capped, stats } = selectDueQueue(manifest, progress, { folderId, shuffle });
 
     const dueWords = [];
     let dropped = 0;

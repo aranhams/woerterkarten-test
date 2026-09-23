@@ -3,7 +3,7 @@ import { LIMIT, LANGUAGES, CARDS_CAP } from "../../lib/constants";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
 import { isDue, nextReview, lvlEmoji, effProgress, MASTERY_LEVEL, INTERVALS } from "../../lib/srs";
 import { withTrans } from "../../lib/word";
-import { isArticleWord } from "../../lib/article";
+import { isArticleWord, shuffle } from "../../lib/article";
 import { translateWord, getLearnQueue } from "../../lib/api";
 import {
   loadVisibleFolders, loadUserWords, loadUserFolders,
@@ -89,7 +89,7 @@ export function LearnTab({ session }) {
       try {
         const r = await getLearnQueue({});
         if (cancelled) return;
-        setAllWords([...r.dueWords, ...uw]);
+        setAllWords(shuffle([...r.dueWords, ...uw]));
         setStats(r.stats); setDelta({ due: 0, learned: 0 });
         setCapped(!!r.capped);
       } catch (e) {
@@ -120,7 +120,7 @@ export function LearnTab({ session }) {
     try {
       const r = await getLearnQueue({ folderId: fid === "all" ? null : fid });
       const uw = await loadUserWords(session.uid);
-      setAllWords([...r.dueWords, ...uw]);
+      setAllWords(shuffle([...r.dueWords, ...uw]));
       setStats(r.stats); setDelta({ due: 0, learned: 0 });
       setCapped(!!r.capped);
     } catch (e) { setQueueError(e.message || "Fehler"); }
@@ -134,7 +134,7 @@ export function LearnTab({ session }) {
       const r = await getLearnQueue({ folderId: filterFolder === "all" ? null : filterFolder });
       setAllWords((prev) => {
         const have = new Set(prev.map((w) => w.id));
-        return [...prev, ...r.dueWords.filter((w) => !have.has(w.id))];
+        return [...prev, ...shuffle(r.dueWords.filter((w) => !have.has(w.id)))];
       });
       setStats(r.stats); setDelta({ due: 0, learned: 0 });
       setCapped(!!r.capped);

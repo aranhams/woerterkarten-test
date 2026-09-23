@@ -128,6 +128,7 @@ export const CARDS_CAP = 200;
 export function selectDueQueue(manifest, progressData, {
   folderId = null, now = Date.now(),
   newPerSession = NEW_PER_SESSION, cardsCap = CARDS_CAP,
+  shuffle = (a) => a,
 } = {}) {
   const progress = progressData || {};
   let total = 0, due = 0, learned = 0;
@@ -151,14 +152,13 @@ export function selectDueQueue(manifest, progressData, {
     candidates.push({ id: e.i, isNew: !p });
   }
 
+  const allowedNew = new Set(
+    shuffle(candidates.filter((c) => c.isNew).map((c) => c.id)).slice(0, newPerSession),
+  );
   const picked = [];
-  let newTaken = 0;
   for (const c of candidates) {
     if (picked.length >= cardsCap) break;
-    if (c.isNew) {
-      if (newTaken >= newPerSession) continue;
-      newTaken++;
-    }
+    if (c.isNew && !allowedNew.has(c.id)) continue;
     picked.push(c.id);
   }
 

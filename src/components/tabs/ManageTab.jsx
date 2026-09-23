@@ -90,6 +90,7 @@ export function ManageTab({ session }) {
   const [editArticleTouched, setEditArticleTouched] = useState(false);
   const [total, setTotal] = useState(null);
   const [manageSection, setManageSection] = useState("words");
+  const [filterFolder, setFilterFolder] = useState("all");
   const [showOptions, setShowOptions] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [selectedWords, setSelectedWords] = useState(new Set());
@@ -158,13 +159,25 @@ export function ManageTab({ session }) {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     const seq = ++searchSeq.current;
     const q = v.trim();
+    const folderId = filterFolder === "all" ? null : filterFolder;
     searchTimer.current = setTimeout(async () => {
       if (q.length > 0 && q.length < MIN_QUERY) return;
       setBusy(true);
-      const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, q }));
+      const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId, q }));
       if (seq === searchSeq.current) { setPage(next); setPageIdx(0); }
       setBusy(false);
     }, SEARCH_DEBOUNCE);
+  }
+
+  async function onFolderChange(v) {
+    setFilterFolder(v);
+    const folderId = v === "all" ? null : v;
+    const q = wordSearch.trim();
+    setBusy(true);
+    const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId, q }));
+    setPage(next); setPageIdx(0);
+    if (!q) setTotal(await countWords({ source: "global", uid: session.uid, teacher: true, folderId }));
+    setBusy(false);
   }
 
   const setWords = (fn) => setPage((p) => (p ? { ...p, rows: typeof fn === "function" ? fn(p.rows) : fn } : p));
@@ -629,7 +642,6 @@ export function ManageTab({ session }) {
   const filteredFolders = fq ? folders.filter((f) => (f.name || "").toLowerCase().includes(fq)) : folders;
   const folderSearchActive = !!fq;
 
-  const pronTodo = words.filter((w) => pronState(w) !== "ready").map((w) => w.id);
   const searching = !!wordSearch.trim();
   const pagedWords = windowRows(page, pageIdx, WORD_PAGE_SERVER).filter((w) => !onlyArticle || isArticleWord(w));
   const bulkCount = bulk.split("\n").map((l) => l.trim()).filter(Boolean).length;
@@ -838,22 +850,28 @@ export function ManageTab({ session }) {
               <input type="checkbox" checked={pagedWords.length > 0 && pagedWords.every((w) => selectedWords.has(w.id))} onChange={selectAllVisible} />
               <span className="sec-label" style={{ margin: 0 }}>Kurswörter ({searching ? words.length : (total ?? words.length)})</span>
             </label>
+          </div>
+          <div className="words-filter-row">
             <div className="words-search">
               <span className="words-search-icon" aria-hidden="true">🔍</span>
               <input className="words-search-input" placeholder="Wörter suchen…" value={wordSearch} onChange={(e) => onSearchChange(e.target.value)} />
             </div>
-          </div>
-          <div className="words-header-tools">
-            <button className={`chip-toggle${onlyArticle ? " on" : ""}`} onClick={() => setOnlyArticle((v) => !v)}
+            <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)} title="Nach Ordner filtern">
+              <option value="all">Alle Ordner</option>
+              {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+            </select>
+            <select value={onlyArticle ? "article" : "all"} onChange={(e) => setOnlyArticle(e.target.value === "article")}
               title="Nur Nomen mit erkanntem Artikel anzeigen (auf der geladenen Seite)">
-              <span className="deck-chip-mark">{onlyArticle ? "✓" : ""}</span>🔤 Nur Artikel-Wörter
-            </button>
-            <button className="btn-tool" onClick={() => syncPron(pronTodo)} disabled={!!syncing || !words.length}
-              title="Worttrennung, Lautschrift und Audio für die geladenen Kurswörter nachladen">
-              {syncing ? `🔊 ${syncing.done} / ${syncing.total}` : `🔊 Aussprache synchronisieren${pronTodo.length ? ` (${pronTodo.length})` : ""}`}
-            </button>
-            {syncing && <button className="btn-tool" onClick={() => { cancelSync.current = true; }}>Abbrechen</button>}
+              <option value="all">Alle Wörter</option>
+              <option value="article">🔤 Artikel-Wörter</option>
+            </select>
           </div>
+          {syncing && (
+            <div className="words-header-tools">
+              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>🔊 {syncing.done} / {syncing.total}</span>
+              <button className="btn-tool" onClick={() => { cancelSync.current = true; }}>Abbrechen</button>
+            </div>
+          )}
           {selectedWords.size > 0 && (
             <div className="bulk-actions-bar">
               <div className="bulk-row">
