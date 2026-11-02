@@ -16,6 +16,7 @@ export const LANGS = [
   { code: "JA", label: "日本語 🇯🇵",       name: "Japanisch" },
   { code: "MK", label: "Македонски 🇲🇰",   name: "Mazedonisch" },
   { code: "BS", label: "Bosanski 🇧🇦",     name: "Bosnisch" },
+  { code: "SQ", label: "Shqip 🇦🇱",        name: "Albanisch" },
   { code: "SI", label: "සිංහල 🇱🇰",         name: "Singhalesisch" },
   { code: "TA", label: "தமிழ் 🇱🇰",         name: "Tamilisch" },
 ];
