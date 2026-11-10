@@ -54,7 +54,7 @@ async function loadClassCorpus(db, data) {
 
 const TEACHER_ACTIONS = new Set([
   "create", "rename", "delete", "regen-code",
-  "list-students", "add-student", "remove-student", "reset-student-password",
+  "list-students", "add-student", "add-students", "remove-student", "reset-student-password",
   "set-folders", "set-folder-audience", "release-folder", "set-words",
   "sync", "cleanup", "word-updated", "word-assigned",
   "progress-report", "student-progress-detail",
@@ -212,6 +212,24 @@ async function dispatch({ db, auth, user, action, body, L }) {
       invalidateReport(body.classId);
       await recomputeDenorm(db, scopeOf(data));
       return { uid, name };
+    }
+
+    case "add-students": {
+      const { ref, data } = await loadClass(body.classId);
+      const uids = parseUids(body.uids);
+      if (!uids.length) throw new HttpError(400, "Keine Schüler ausgewählt");
+      const members = new Set(data.memberUids || []);
+      const before = members.size;
+      for (const u of uids) members.add(u);
+      if (members.size === before) return { added: 0 };
+      await ref.set({
+        memberUids: [...members],
+        memberNames: FieldValue.delete(),
+        updatedAt: stamp(),
+      }, { merge: true });
+      invalidateReport(body.classId);
+      await recomputeDenorm(db, scopeOf(data));
+      return { added: members.size - before };
     }
 
     case "remove-student": {
@@ -707,7 +725,7 @@ async function listAllStudents(db, auth) {
   const students = [];
   for (const d of snap.docs) {
     if (teacherUids.has(d.id)) continue;
-    students.push({ uid: d.id, username: d.data().username || d.id.slice(0, 6) });
+    students.push({ uid: d.id, username: d.data().username || d.id.slice(0, 6), createdAt: d.data().createdAt?.toMillis?.() ?? null });
   }
   students.sort((a, b) => a.username.localeCompare(b.username));
   return students;

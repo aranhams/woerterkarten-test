@@ -24,6 +24,7 @@ export function KurseTab({ session }) {
   const [copyMsg, setCopyMsg] = useState("");
   const [roster, setRoster] = useState([]);
   const [studentSearch, setStudentSearch] = useState("");
+  const [availFilter, setAvailFilter] = useState("all");
   const [classSearch, setClassSearch] = useState("");
   const [repeatFolders, setRepeatFolders] = useState(() => new Set());
   const [repeatDuration, setRepeatDuration] = useState("1");
@@ -96,7 +97,18 @@ export function KurseTab({ session }) {
   const filteredClasses = classQuery ? classes.filter((c) => (c.name || "").toLowerCase().includes(classQuery)) : classes;
   const members = selected ? (selected.memberUids || []) : [];
   const enrolledSet = new Set(members);
-  const availableStudents = roster.filter((s) => !enrolledSet.has(s.uid) && (!studentSearch.trim() || s.username.toLowerCase().includes(studentSearch.trim().toLowerCase())));
+  const NEW_WINDOW_MS = 7 * 86400000;
+  const enrolledAnywhere = new Set();
+  for (const c of classes) for (const u of (c.memberUids || [])) enrolledAnywhere.add(u);
+  const now = Date.now();
+  let availableStudents = roster.filter((s) => !enrolledSet.has(s.uid) && (!studentSearch.trim() || s.username.toLowerCase().includes(studentSearch.trim().toLowerCase())));
+  if (availFilter === "new") {
+    availableStudents = availableStudents
+      .filter((s) => s.createdAt != null && now - s.createdAt <= NEW_WINDOW_MS)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  } else if (availFilter === "noclass") {
+    availableStudents = availableStudents.filter((s) => !enrolledAnywhere.has(s.uid));
+  }
   const rosterById = new Map(roster.map((s) => [s.uid, s.username]));
   const nameOf = (uid) => rosterById.get(uid) || uid.slice(0, 6);
   const folderState = (fid) => {
@@ -168,6 +180,15 @@ export function KurseTab({ session }) {
     try {
       await call("add-student", { classId: selected.id, uid });
       patchClass(selected.id, { memberUids: [...new Set([...(selected.memberUids || []), uid])] });
+    } catch {}
+  }
+  async function addAllAvailable() {
+    if (!selected || !availableStudents.length) return;
+    const uids = availableStudents.map((s) => s.uid);
+    try {
+      await call("add-students", { classId: selected.id, uids });
+      patchClass(selected.id, { memberUids: [...new Set([...(selected.memberUids || []), ...uids])] });
+      flash(`✓ ${uids.length} hinzugefügt`);
     } catch {}
   }
   async function removeStudent(uid) {
@@ -322,9 +343,22 @@ export function KurseTab({ session }) {
         <div className="sec-label" style={{ marginTop: 0 }}>Schüler ({members.length})</div>
         <input placeholder="🔍 Schüler suchen…" value={studentSearch} onChange={(e) => setStudentSearch(e.target.value)}
           style={{ width: "100%", padding: "9px 12px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "white", outline: "none", fontFamily: "inherit" }} />
+        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+          {[["all", "Alle"], ["new", "🆕 Neu (7 Tage)"], ["noclass", "🚫 Ohne Kurs"]].map(([key, label]) => (
+            <button key={key} className="btn-sm" onClick={() => setAvailFilter(key)}
+              style={availFilter === key ? { background: "var(--sage)", color: "white", borderColor: "var(--sage)" } : undefined}>
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="transfer">
           <div className="transfer-col">
-            <div className="sec-label">Verfügbar ({availableStudents.length})</div>
+            <div className="sec-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span>Verfügbar ({availableStudents.length})</span>
+              {availableStudents.length > 0 && (
+                <button className="btn-sm" onClick={addAllAvailable} disabled={busy} style={{ color: "var(--sage)" }}>＋ Alle hinzufügen</button>
+              )}
+            </div>
             <div className="transfer-list">
               {availableStudents.length === 0 && <div className="transfer-empty">{roster.length === 0 ? "Keine registrierten Schüler." : "Keine Treffer."}</div>}
               {availableStudents.map((s) => (

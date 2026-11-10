@@ -19,6 +19,7 @@ export const LANGS = [
   { code: "SQ", label: "Shqip 🇦🇱",        name: "Albanisch" },
   { code: "SI", label: "සිංහල 🇱🇰",         name: "Singhalesisch" },
   { code: "TA", label: "தமிழ் 🇱🇰",         name: "Tamilisch" },
+  { code: "KO", label: "한국어 🇰🇷",        name: "Koreanisch" },
 ];
 
 export const LANGUAGES = LANGS.map(({ code, label }) => ({ code, label }));
