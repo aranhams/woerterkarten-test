@@ -15,6 +15,7 @@ import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
 import { PrintFolderModal } from "../PrintFolderModal";
+import { FolderWordsModal } from "../FolderWordsModal";
 import { CollocationsTeacherTab } from "./CollocationsTeacherTab";
 
 const PRON_BATCH = 25;
@@ -91,6 +92,7 @@ export function ManageTab({ session }) {
   const [folderName, setFolderName] = useState(""); const [folderIcon, setFolderIcon] = useState("📁");
   const [folderIsParent, setFolderIsParent] = useState(false);
   const [printFolder, setPrintFolder] = useState(null);
+  const [wordsFolder, setWordsFolder] = useState(null);
   const [quickFolder, setQuickFolder] = useState(null);
   const [page, setPage] = useState(null); const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -772,7 +774,7 @@ export function ManageTab({ session }) {
               <button className="btn-sm" onClick={() => setEditFolderId(null)}>Abbrechen</button>
             </>) : (<>
               <span className="folder-row-name">
-                <span className="folder-row-label">{f.name}</span>
+                <button type="button" className="folder-row-label folder-name-btn" title="Wörter anzeigen" onClick={() => setWordsFolder(f)}>{f.name}</button>
                 {parent && <span className="folder-group-pill">Überordner · {kids} Ordner</span>}
                 {!parent && f.parentId && <span className="folder-parent-tag">{f.parentIcon || "📂"} {f.parentName}</span>}
               </span>
@@ -796,6 +798,8 @@ export function ManageTab({ session }) {
     </div>)}
 
     {printFolder && <PrintFolderModal folder={printFolder} folders={folders} onClose={() => setPrintFolder(null)} />}
+
+    {wordsFolder && <FolderWordsModal folder={wordsFolder} folders={folders} onClose={() => setWordsFolder(null)} />}
 
     {manageSection === "words" && (
     <div className="manage-words-layout">

@@ -241,6 +241,8 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .folder-row-icon.parent{width:30px;height:30px;border-radius:9px;background:var(--accent-pale);font-size:15px;}
 .folder-row-name{flex:1;min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .folder-row-label{font-size:14px;overflow-wrap:anywhere;}
+.folder-name-btn{font-family:inherit;color:inherit;background:none;border:none;padding:2px 0;text-align:left;cursor:pointer;border-bottom:1px dashed transparent;transition:color .15s,border-color .15s;}
+.folder-name-btn:hover{color:var(--sage);border-bottom-color:var(--sage-light);}
 .folder-row.is-parent{background:linear-gradient(90deg,var(--accent-pale),transparent 70%);border-radius:10px;margin-top:6px;border-top:none;padding:10px 8px;}
 .folder-row.is-parent .folder-row-label{font-weight:700;font-size:15px;color:var(--ink);}
 .folder-row.is-child{padding-left:20px;position:relative;}
