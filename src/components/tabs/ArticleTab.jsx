@@ -154,7 +154,8 @@ export function ArticleTab({ session }) {
   useCardNavKeys(goPrev, goNext, [idx, deck.length]);
 
   function restart() {
-    setDeck(buildArticleDeck(isTeacher ? scopedCards.map((c) => ({ ...c, deRev: -1 })) : cards, isTeacher ? {} : progress));
+    const base = isTeacher ? scopedCards : cards;
+    setDeck(buildArticleDeck(base.map((c) => ({ ...c, deRev: -1 })), {}));
     setIdx(0);
     setPicked(null);
     setShowTrans(false);
@@ -231,15 +232,26 @@ export function ArticleTab({ session }) {
       </div>
     ) : done ? (
       <div className="empty" style={{ padding: 40 }}>
-        <div className="emoji">🎉</div>
-        <h3>{round.answered > 0 ? "Runde geschafft!" : "Alles geübt!"}</h3>
+        <div className="emoji">{round.answered > 0 && round.correct === round.answered ? "🏆" : "🎉"}</div>
+        <h3>
+          {round.answered === 0
+            ? "Alles geübt!"
+            : round.correct === round.answered
+              ? "Alles richtig!"
+              : "Runde geschafft!"}
+        </h3>
         {round.answered > 0 && (
           <p style={{ fontSize: 16, marginTop: 4 }}>
             {round.correct} / {round.answered} richtig
             {" "}({Math.round((round.correct / round.answered) * 100)}%)
           </p>
         )}
-        <button className="btn-add" style={{ marginTop: 14 }} onClick={restart}>Nochmal üben</button>
+        {round.answered > 0 && round.correct === round.answered && (
+          <p style={{ fontSize: 14, color: "var(--ink-soft)", marginTop: 6 }}>
+            Super! Möchtest du die Artikel gleich nochmal üben?
+          </p>
+        )}
+        <button className="btn-add" style={{ marginTop: 14 }} onClick={restart}>🔁 Nochmal üben</button>
       </div>
     ) : current ? (
       <CardNav pos={idx} len={deck.length} onPrev={goPrev} onNext={goNext}>

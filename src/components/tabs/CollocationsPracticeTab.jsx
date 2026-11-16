@@ -131,7 +131,8 @@ export function CollocationsPracticeTab({ session }) {
   useCardNavKeys(goPrev, goNext, [idx, deck.length]);
 
   function restart() {
-    setDeck(buildDeck(isTeacher ? scopedQuestions.map((q) => ({ ...q, rev: -1 })) : questions, isTeacher ? {} : progress));
+    const base = isTeacher ? scopedQuestions : questions;
+    setDeck(buildDeck(base.map((q) => ({ ...q, rev: -1 })), {}));
     setIdx(0);
     setPicked(null);
     setSession_({ answered: 0, correct: 0 });
@@ -207,15 +208,26 @@ export function CollocationsPracticeTab({ session }) {
       </div>
     ) : done ? (
       <div className="empty" style={{ padding: 40 }}>
-        <div className="emoji">🎉</div>
-        <h3>{session_.answered > 0 ? "Runde geschafft!" : "Alles geübt!"}</h3>
+        <div className="emoji">{session_.answered > 0 && session_.correct === session_.answered ? "🏆" : "🎉"}</div>
+        <h3>
+          {session_.answered === 0
+            ? "Alles geübt!"
+            : session_.correct === session_.answered
+              ? "Alles richtig!"
+              : "Runde geschafft!"}
+        </h3>
         {session_.answered > 0 && (
           <p style={{ fontSize: 16, marginTop: 4 }}>
             {session_.correct} / {session_.answered} richtig
             {" "}({Math.round((session_.correct / session_.answered) * 100)}%)
           </p>
         )}
-        <button className="btn-add" style={{ marginTop: 14 }} onClick={restart}>Nochmal üben</button>
+        {session_.answered > 0 && session_.correct === session_.answered && (
+          <p style={{ fontSize: 14, color: "var(--ink-soft)", marginTop: 6 }}>
+            Super! Möchtest du die Übungen gleich nochmal machen?
+          </p>
+        )}
+        <button className="btn-add" style={{ marginTop: 14 }} onClick={restart}>🔁 Nochmal üben</button>
       </div>
     ) : current ? (
       <CardNav pos={idx} len={deck.length} onPrev={goPrev} onNext={goNext}>
