@@ -126,11 +126,12 @@ export const NEW_PER_SESSION = 30;
 export const CARDS_CAP = 200;
 
 export function selectDueQueue(manifest, progressData, {
-  folderId = null, now = Date.now(),
+  folderId = null, folderIds = null, now = Date.now(),
   newPerSession = NEW_PER_SESSION, cardsCap = CARDS_CAP,
   shuffle = (a) => a,
 } = {}) {
   const progress = progressData || {};
+  const folderSet = Array.isArray(folderIds) ? new Set(folderIds) : null;
   let total = 0, due = 0, learned = 0;
   const perFolder = {};
   const candidates = [];
@@ -148,7 +149,7 @@ export function selectDueQueue(manifest, progressData, {
     if (!isDueEff(word, p, now)) continue;
     due++;
     bucket.due++;
-    if (folderId && e.f !== folderId) continue;
+    if (folderSet) { if (!folderSet.has(e.f)) continue; } else if (folderId && e.f !== folderId) continue;
     candidates.push({ id: e.i, isNew: !p });
   }
 

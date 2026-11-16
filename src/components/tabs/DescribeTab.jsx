@@ -4,6 +4,7 @@ import { LIMIT } from "../../lib/constants";
 import { validImageUrl, cldImg } from "../../lib/format";
 import { descFresh, buildDesc } from "../../lib/word";
 import { loadGlobalFolders } from "../../data/loaders";
+import { folderFilterOptions, resolveFolderScope } from "../../lib/folders";
 import { newPageState, loadNextPage, countWords } from "../../data/pagination";
 import { usePronunciation } from "../../data/usePron";
 import { dbSet } from "../../data/db";
@@ -28,7 +29,7 @@ export function DescribeTab({ session }) {
   const searchTimer = useRef(null);
   const searchSeq = useRef(0);
 
-  const folderScope = (fid) => (!fid || fid === "all" ? null : fid);
+  const folderScope = (fid) => resolveFolderScope(folders, fid);
 
   useEffect(() => {
     (async () => {
@@ -61,8 +62,8 @@ export function DescribeTab({ session }) {
     setBusy(true);
     const q = search.trim();
     const [next, n] = await Promise.all([
-      loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId: folderScope(v), q })),
-      q ? Promise.resolve(undefined) : countWords({ source: "global", uid: session.uid, teacher: true, folderId: folderScope(v) }),
+      loadNextPage(newPageState({ uid: session.uid, teacher: true, ...folderScope(v), q })),
+      q ? Promise.resolve(undefined) : countWords({ source: "global", uid: session.uid, teacher: true, ...folderScope(v) }),
     ]);
     resetTo(next, q ? undefined : n);
     setBusy(false);
@@ -76,7 +77,7 @@ export function DescribeTab({ session }) {
     searchTimer.current = setTimeout(async () => {
       if (q.length > 0 && q.length < MIN_QUERY) return;
       setBusy(true);
-      const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId: folderScope(filterFolder), q }));
+      const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, ...folderScope(filterFolder), q }));
       if (seq === searchSeq.current) resetTo(next);
       setBusy(false);
     }, SEARCH_DEBOUNCE);
@@ -138,7 +139,7 @@ export function DescribeTab({ session }) {
       <input placeholder="🔍 Wörter suchen…" value={search} onChange={(e) => onSearchChange(e.target.value)} />
       <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)}>
         <option value="all">Alle Ordner</option>
-        {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+        {folderFilterOptions(folders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </div>
 

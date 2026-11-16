@@ -46,7 +46,11 @@ export default async function handler(req, res) {
   }
 
   const body = req.body || {};
-  const folderId = body.folderId ? String(body.folderId).slice(0, 64) : null;
+  const FOLDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+  const folderId = body.folderId && FOLDER_ID.test(String(body.folderId)) ? String(body.folderId) : null;
+  const folderIds = Array.isArray(body.folderIds)
+    ? body.folderIds.map((x) => String(x)).filter((x) => FOLDER_ID.test(x)).slice(0, 30)
+    : null;
   const db = getDb();
 
   const metaP = db.getAll(
@@ -92,7 +96,7 @@ export default async function handler(req, res) {
 
     const gen = built ? 1 : (manifestSnap.data().gen || 0);
     const progress = (progressSnap.exists ? progressSnap.data()?.data : null) || {};
-    const { picked, capped, stats } = selectDueQueue(manifest, progress, { folderId, shuffle });
+    const { picked, capped, stats } = selectDueQueue(manifest, progress, { folderId, folderIds, shuffle });
 
     const dueWords = [];
     let dropped = 0;

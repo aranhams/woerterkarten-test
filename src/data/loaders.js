@@ -134,6 +134,17 @@ export async function loadClassWords(cls, cap = 200) {
   return { rows: rows.slice(0, cap), exhausted: rows.length <= cap };
 }
 
+export async function loadFolderWords(folderIds) {
+  const ids = [...new Set((folderIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+  const seen = new Map();
+  for (const slice of chunk(ids, 30)) {
+    const snap = await getDocs(query(collection(db, "global_words"), where("folderId", "in", slice)));
+    for (const d of snap.docs) seen.set(d.id, { id: d.id, ...d.data() });
+  }
+  return [...seen.values()].sort((a, b) => String(a.deL || a.de || "").localeCompare(String(b.deL || b.de || "")));
+}
+
 export function cachePron(session, word, pron) {
   if (word.source !== "global") cacheUpdate(`users/${session.uid}/words`, word.id, { pron });
 }

@@ -6,6 +6,7 @@ import { loadCollocationProgress, saveOneCollocationProgress } from "../../data/
 import {
   buildDeck, selectDueCollocations, answerCollocation, fullPhrase, reflexiveParts, separableParts, declineStem,
 } from "../../lib/collocation";
+import { folderFilterOptions, matchFolderValue } from "../../lib/folders";
 import { CardNav, useCardNavKeys } from "../CardNav";
 
 export function CollocationsPracticeTab({ session }) {
@@ -67,11 +68,6 @@ export function CollocationsPracticeTab({ session }) {
     return () => { cancelled = true; };
   }, [session.uid]);
 
-  async function onFolderChange(v) {
-    setFilterFolder(v);
-    await load({ folderId: v });
-  }
-
   async function onClassChange(v) {
     setFilterClass(v);
     setFilterFolder("");
@@ -79,29 +75,28 @@ export function CollocationsPracticeTab({ session }) {
     await load({ classId: v });
   }
 
-  function onTeacherFolderChange(v) {
-    setFilterFolder(v);
-    const subset = v ? questions.filter((q) => (q.folderId ?? null) === v) : questions;
-    setDeck(buildDeck(subset.map((q) => ({ ...q, rev: -1 })), {}));
-    setIdx(0);
-    setPicked(null);
-    setSession_({ answered: 0, correct: 0 });
-  }
-
   const selectedClass = isTeacher ? classes.find((c) => c.id === filterClass) : null;
   const classFolders = selectedClass
     ? folders.filter((f) => (selectedClass.folders || []).some((e) => e && e.folderId === f.id))
     : [];
-  const scopedQuestions = isTeacher && filterFolder
-    ? questions.filter((q) => (q.folderId ?? null) === filterFolder)
-    : questions;
+  const filterFolders = isTeacher ? classFolders : folders;
+  const scopedQuestions = questions.filter((q) => matchFolderValue(filterFolders, filterFolder, q.folderId));
+
+  function applyFolder(v) {
+    setFilterFolder(v);
+    const scoped = questions.filter((q) => matchFolderValue(filterFolders, v, q.folderId));
+    setDeck(buildDeck(isTeacher ? scoped.map((q) => ({ ...q, rev: -1 })) : scoped, isTeacher ? {} : progress));
+    setIdx(0);
+    setPicked(null);
+    setSession_({ answered: 0, correct: 0 });
+  }
 
   const current = deck[idx] || null;
   const answered = picked !== null;
   const correctId = current?.answerId;
 
   const stats = selectDueCollocations(
-    isTeacher ? scopedQuestions.map((q) => ({ ...q, rev: -1 })) : questions,
+    isTeacher ? scopedQuestions.map((q) => ({ ...q, rev: -1 })) : scopedQuestions,
     isTeacher ? {} : progress,
   );
   const learned = isTeacher ? 0 : stats.learned;
@@ -131,8 +126,7 @@ export function CollocationsPracticeTab({ session }) {
   useCardNavKeys(goPrev, goNext, [idx, deck.length]);
 
   function restart() {
-    const base = isTeacher ? scopedQuestions : questions;
-    setDeck(buildDeck(base.map((q) => ({ ...q, rev: -1 })), {}));
+    setDeck(buildDeck(scopedQuestions.map((q) => ({ ...q, rev: -1 })), {}));
     setIdx(0);
     setPicked(null);
     setSession_({ answered: 0, correct: 0 });
@@ -150,7 +144,7 @@ export function CollocationsPracticeTab({ session }) {
     );
   }
 
-  const total = isTeacher ? scopedQuestions.length : questions.length;
+  const total = scopedQuestions.length;
   const done = idx >= deck.length;
 
   return (<>
@@ -169,17 +163,17 @@ export function CollocationsPracticeTab({ session }) {
           {classes.map((c) => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
         </select>
         {filterClass && classFolders.length > 0 && (
-          <select value={filterFolder} onChange={(e) => onTeacherFolderChange(e.target.value)}>
+          <select value={filterFolder} onChange={(e) => applyFolder(e.target.value)}>
             <option value="">📂 Alle Ordner</option>
-            {classFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+            {folderFilterOptions(classFolders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         )}
       </div>
     ) : folders.length > 0 && (
       <div className="filter-bar">
-        <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)}>
+        <select value={filterFolder} onChange={(e) => applyFolder(e.target.value)}>
           <option value="all">📂 Alle Ordner</option>
-          {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+          {folderFilterOptions(folders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </div>
     )}

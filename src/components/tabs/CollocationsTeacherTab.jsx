@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { loadGlobalFolders } from "../../data/loaders";
+import { folderFilterOptions, resolveFolderScope } from "../../lib/folders";
 import { loadCollocationSet, loadVariantSets } from "../../data/collocations";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { WORD_PAGE_SERVER } from "../../lib/constants";
@@ -63,13 +64,13 @@ export function CollocationsTeacherTab({ session }) {
   const [manual, setManual] = useState(null);
   const [variantAdd, setVariantAdd] = useState(null);
 
-  const folderScope = (fid) => (!fid || fid === "all" ? null : fid);
+  const folderScope = (fid) => resolveFolderScope(folders, fid);
 
-  async function loadListPage({ folderId = folderScope(filterFolder), q = searchQuery.trim(), pageIndex = 0 } = {}) {
+  async function loadListPage({ scope = folderScope(filterFolder), q = searchQuery.trim(), pageIndex = 0 } = {}) {
     setBusy(true);
     const [next, n] = await Promise.all([
-      loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId, q })),
-      countWords({ source: "global", uid: session.uid, teacher: true, folderId, q }),
+      loadNextPage(newPageState({ uid: session.uid, teacher: true, ...scope, q })),
+      countWords({ source: "global", uid: session.uid, teacher: true, ...scope, q }),
     ]);
     setPage(next);
     setPageIdx(pageIndex);
@@ -186,7 +187,7 @@ export function CollocationsTeacherTab({ session }) {
     setFilterFolder(v);
     setEdit(null);
     setManual(null);
-    await loadListPage({ folderId: folderScope(v), q: searchQuery.trim(), pageIndex: 0 });
+    await loadListPage({ scope: folderScope(v), q: searchQuery.trim(), pageIndex: 0 });
   }
 
   async function goto(i) {
@@ -649,7 +650,7 @@ export function CollocationsTeacherTab({ session }) {
       />
       <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)}>
         <option value="all">Alle Ordner</option>
-        {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+        {folderFilterOptions(folders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
       <select value={activationFilter} onChange={(e) => { setActivationFilter(e.target.value); setExpandedId(null); }}>
         <option value="all">Alle Status</option>

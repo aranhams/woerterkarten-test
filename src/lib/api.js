@@ -34,12 +34,12 @@ export async function classSync(action, payload = {}) {
 export const getProgressReport = (classId, { fresh = false } = {}) => classSync("progress-report", { classId, fresh });
 export const getStudentProgressDetail = (classId, uid) => classSync("student-progress-detail", { classId, uid });
 
-export async function getLearnQueue({ folderId = null } = {}) {
+export async function getLearnQueue({ folderId = null, folderIds = null } = {}) {
   const token = await idToken();
   const res = await fetch("/api/learn-queue", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ folderId }),
+    body: JSON.stringify({ folderId, folderIds }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Fehler");

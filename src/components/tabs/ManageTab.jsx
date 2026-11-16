@@ -7,18 +7,42 @@ import { validateWordInput, germanChanged, nextDeRev, searchFields, buildDesc, d
 import { classSync, requestPronunciation, resyncPronunciation, purgeCollocationSets, lookupGenus, collocationSync } from "../../lib/api";
 import { pronState } from "../../lib/pron";
 import { resolveArticleAnswer, isArticleWord } from "../../lib/article";
+import { folderFilterOptions, isParentFolder, resolveFolderScope } from "../../lib/folders";
 import { loadGlobalFolders } from "../../data/loaders";
 import { loadCollocationSet } from "../../data/collocations";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate } from "../../data/cache";
 import { ImageUpload } from "../ImageUpload";
+import { PrintFolderModal } from "../PrintFolderModal";
 import { CollocationsTeacherTab } from "./CollocationsTeacherTab";
 
 const PRON_BATCH = 25;
 const WRITE_BATCH = 450;
 const SEARCH_DEBOUNCE = 350;
 const MIN_QUERY = 2;
+
+function orderFolderTree(list) {
+  const byOrder = [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const parentIds = new Set(byOrder.filter(isParentFolder).map((f) => f.id));
+  const childrenOf = new Map();
+  for (const f of byOrder) {
+    if (!isParentFolder(f) && f.parentId && parentIds.has(f.parentId)) {
+      if (!childrenOf.has(f.parentId)) childrenOf.set(f.parentId, []);
+      childrenOf.get(f.parentId).push(f);
+    }
+  }
+  const out = [];
+  for (const f of byOrder) {
+    if (isParentFolder(f)) {
+      out.push(f);
+      for (const c of childrenOf.get(f.id) || []) out.push(c);
+    } else if (!(f.parentId && parentIds.has(f.parentId))) {
+      out.push(f);
+    }
+  }
+  return out;
+}
 const VALID_ARTICLES = ["der", "die", "das", "ein", "eine", "-"];
 const AMBIGUOUS_ARTICLE_MS = 1000;
 
@@ -65,6 +89,8 @@ export function ManageTab({ session }) {
   const [folderId, setFolderId] = useState(""); const [imageUrl, setImageUrl] = useState("");
   const [bulk, setBulk] = useState(""); const [msg, setMsg] = useState("");
   const [folderName, setFolderName] = useState(""); const [folderIcon, setFolderIcon] = useState("📁");
+  const [folderIsParent, setFolderIsParent] = useState(false);
+  const [printFolder, setPrintFolder] = useState(null);
   const [quickFolder, setQuickFolder] = useState(null);
   const [page, setPage] = useState(null); const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -159,11 +185,11 @@ export function ManageTab({ session }) {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     const seq = ++searchSeq.current;
     const q = v.trim();
-    const folderId = filterFolder === "all" ? null : filterFolder;
+    const scope = resolveFolderScope(folders, filterFolder);
     searchTimer.current = setTimeout(async () => {
       if (q.length > 0 && q.length < MIN_QUERY) return;
       setBusy(true);
-      const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId, q }));
+      const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, ...scope, q }));
       if (seq === searchSeq.current) { setPage(next); setPageIdx(0); }
       setBusy(false);
     }, SEARCH_DEBOUNCE);
@@ -171,12 +197,12 @@ export function ManageTab({ session }) {
 
   async function onFolderChange(v) {
     setFilterFolder(v);
-    const folderId = v === "all" ? null : v;
+    const scope = resolveFolderScope(folders, v);
     const q = wordSearch.trim();
     setBusy(true);
-    const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, folderId, q }));
+    const next = await loadNextPage(newPageState({ uid: session.uid, teacher: true, ...scope, q }));
     setPage(next); setPageIdx(0);
-    if (!q) setTotal(await countWords({ source: "global", uid: session.uid, teacher: true, folderId }));
+    if (!q) setTotal(await countWords({ source: "global", uid: session.uid, teacher: true, ...scope }));
     setBusy(false);
   }
 
@@ -251,10 +277,22 @@ export function ManageTab({ session }) {
   async function saveFolderName(id) {
     const nm = clip(editFolderName.trim(), LIMIT.folder);
     if (!nm) return;
+    const parent = isParentFolder(folders.find((f) => f.id === id));
     try {
       await dbSet(`global_folders/${id}`, { name: nm });
       cacheUpdate("global_folders", id, { name: nm });
-      setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: nm } : f)));
+      let patched = folders.map((f) => (f.id === id ? { ...f, name: nm } : f));
+      if (parent) {
+        const kids = folders.filter((f) => f.parentId === id);
+        if (kids.length) {
+          const batch = writeBatch(db);
+          for (const k of kids) batch.update(doc(db, "global_folders", k.id), { parentName: nm });
+          await batch.commit();
+          for (const k of kids) cacheUpdate("global_folders", k.id, { parentName: nm });
+          patched = patched.map((f) => (f.parentId === id ? { ...f, parentName: nm } : f));
+        }
+      }
+      setFolders(patched);
       setEditFolderId(null);
       flash("✓ Ordner umbenannt");
     } catch { flash("⚠ Keine Berechtigung."); }
@@ -541,14 +579,32 @@ export function ManageTab({ session }) {
   async function addFolder() {
     if (!folderName.trim()) return;
     const id = `gf_${Date.now()}`;
-    const f = { name: clip(folderName.trim(), LIMIT.folder), icon: folderIcon, source: "global", memberUids: [], order: nextFolderOrder() };
+    const f = {
+      name: clip(folderName.trim(), LIMIT.folder), icon: folderIcon, source: "global",
+      memberUids: [], order: nextFolderOrder(), ...(folderIsParent ? { kind: "parent" } : {}),
+    };
     try {
       await dbSet(`global_folders/${id}`, f);
       cachePush("global_folders", { ...f, id });
       setFolders((prev) => [...prev, { ...f, id }].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
-      setFolderName(""); setFolderIcon("📁"); flash("✓ Ordner erstellt");
+      setFolderName(""); setFolderIcon("📁");
+      flash(folderIsParent ? "✓ Überordner erstellt" : "✓ Ordner erstellt");
+      setFolderIsParent(false);
     }
     catch { flash("⚠ Keine Berechtigung."); }
+  }
+
+  async function assignParent(childId, parentId) {
+    const parent = parentId ? folders.find((f) => f.id === parentId) : null;
+    const patch = parentId
+      ? { parentId, parentName: parent?.name || "", parentIcon: parent?.icon || "📁" }
+      : { parentId: null, parentName: null, parentIcon: null };
+    try {
+      await dbSet(`global_folders/${childId}`, patch);
+      cacheUpdate("global_folders", childId, patch);
+      setFolders((prev) => prev.map((f) => (f.id === childId ? { ...f, ...patch } : f)));
+      flash(parentId ? "✓ Ordner gruppiert" : "✓ Aus Gruppe entfernt");
+    } catch { flash("⚠ Keine Berechtigung."); }
   }
 
   async function addQuickFolder() {
@@ -577,11 +633,23 @@ export function ManageTab({ session }) {
     } catch { flash("⚠ Keine Berechtigung."); }
   }
   async function deleteFolder(id) {
+    const parent = isParentFolder(folders.find((f) => f.id === id));
     try {
+      if (parent) {
+        const kids = folders.filter((f) => f.parentId === id);
+        if (kids.length) {
+          const batch = writeBatch(db);
+          for (const k of kids) batch.update(doc(db, "global_folders", k.id), { parentId: null, parentName: null, parentIcon: null });
+          await batch.commit();
+          for (const k of kids) cacheUpdate("global_folders", k.id, { parentId: null, parentName: null, parentIcon: null });
+        }
+      }
       await dbDelete(`global_folders/${id}`);
       cacheRemove("global_folders", id);
-      setFolders((prev) => prev.filter((f) => f.id !== id));
-      classSync("cleanup", { folderId: id }).catch(() => {});
+      setFolders((prev) => prev
+        .map((f) => (f.parentId === id ? { ...f, parentId: null, parentName: null, parentIcon: null } : f))
+        .filter((f) => f.id !== id));
+      if (!parent) classSync("cleanup", { folderId: id }).catch(() => {});
     } catch { flash("⚠ Keine Berechtigung."); }
   }
 
@@ -639,8 +707,11 @@ export function ManageTab({ session }) {
   if (loading) return <div className="loading"><div className="spinner" /><br />Lädt…</div>;
 
   const fq = folderSearch.trim().toLowerCase();
-  const filteredFolders = fq ? folders.filter((f) => (f.name || "").toLowerCase().includes(fq)) : folders;
+  const orderedFolders = orderFolderTree(folders);
+  const filteredFolders = fq ? orderedFolders.filter((f) => (f.name || "").toLowerCase().includes(fq)) : orderedFolders;
   const folderSearchActive = !!fq;
+  const parentFolders = folders.filter(isParentFolder);
+  const assignableFolders = folders.filter((f) => !isParentFolder(f));
 
   const searching = !!wordSearch.trim();
   const pagedWords = windowRows(page, pageIdx, WORD_PAGE_SERVER).filter((w) => !onlyArticle || isArticleWord(w));
@@ -655,13 +726,21 @@ export function ManageTab({ session }) {
       <button className={`nav-tab${manageSection === "collocations" ? " active" : ""}`} onClick={() => setManageSection("collocations")}>🔗 Wortverbindungen</button>
     </div>
 
-    {manageSection === "folders" && (<div className="add-form">
-      <h3>📁 Kurs-Ordner erstellen</h3>
+    {manageSection === "folders" && (<div className={`add-form folder-create${folderIsParent ? " is-parent" : ""}`}>
+      <div className="seg-toggle">
+        <button type="button" className={`seg-btn${!folderIsParent ? " active" : ""}`} onClick={() => setFolderIsParent(false)}>📁 Kurs-Ordner</button>
+        <button type="button" className={`seg-btn${folderIsParent ? " active" : ""}`} onClick={() => setFolderIsParent(true)}>📂 Überordner</button>
+      </div>
+      <p className="folder-create-hint">
+        {folderIsParent
+          ? "Ein Überordner gruppiert mehrere Ordner zu einer Lektion oder einem Thema — er enthält selbst keine Wörter."
+          : "Ein Kurs-Ordner enthält die Wörter, die du deinen Schülern zuweist."}
+      </p>
       <div className="form-row">
         <select value={folderIcon} onChange={(e) => setFolderIcon(e.target.value)} style={{ flex: "none", width: 80 }}>
           {FOLDER_ICONS.map((ic) => <option key={ic} value={ic}>{ic}</option>)}
         </select>
-        <input placeholder="Ordnername, z. B. Lektion 1" value={folderName} maxLength={LIMIT.folder} onChange={(e) => setFolderName(e.target.value)} />
+        <input placeholder={folderIsParent ? "Name der Gruppe, z. B. Lektionen" : "Ordnername, z. B. Lektion 1"} value={folderName} maxLength={LIMIT.folder} onChange={(e) => setFolderName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && folderName.trim()) addFolder(); }} />
         <button className="btn-add" onClick={addFolder} disabled={!folderName.trim()}>Erstellen</button>
       </div>
       {folders.length > 0 && <div style={{ marginTop: 10 }}>
@@ -669,10 +748,13 @@ export function ManageTab({ session }) {
           style={{ width: "100%", padding: "8px 11px", border: "1.5px solid var(--ivory-dark)", borderRadius: 8, fontSize: 13, background: "var(--ivory)", outline: "none", fontFamily: "inherit", marginBottom: 6 }} />
         {folderSearchActive && <div className="transfer-empty" style={{ marginBottom: 8 }}>Ziehen zum Sortieren ist bei Suche deaktiviert.</div>}
         {filteredFolders.length === 0 && <div className="transfer-empty">Keine Treffer.</div>}
-        {filteredFolders.map((f) => (
+        {filteredFolders.map((f) => {
+          const parent = isParentFolder(f);
+          const kids = parent ? folders.filter((x) => x.parentId === f.id).length : 0;
+          return (
           <div
             key={f.id}
-            className={`folder-row${dragFolderId === f.id ? " dragging" : ""}${dragOverFolderId === f.id ? " drag-over" : ""}`}
+            className={`folder-row${parent ? " is-parent" : ""}${!parent && f.parentId ? " is-child" : ""}${dragFolderId === f.id ? " dragging" : ""}${dragOverFolderId === f.id ? " drag-over" : ""}`}
             draggable={!folderSearchActive && editFolderId !== f.id}
             onDragStart={(e) => onFolderDragStart(e, f.id)}
             onDragOver={(e) => onFolderDragOver(e, f.id)}
@@ -680,7 +762,7 @@ export function ManageTab({ session }) {
             onDragEnd={onFolderDragEnd}
           >
             <span className="folder-drag-handle">⋮⋮</span>
-            <span style={{ fontSize: 16 }}>{f.icon}</span>
+            <span className={`folder-row-icon${parent ? " parent" : ""}`}>{f.icon}</span>
             {editFolderId === f.id ? (<>
               <input value={editFolderName} maxLength={LIMIT.folder} autoFocus
                 onChange={(e) => setEditFolderName(e.target.value)}
@@ -689,14 +771,31 @@ export function ManageTab({ session }) {
               <button className="btn-sm" onClick={() => saveFolderName(f.id)} disabled={!editFolderName.trim()}>Speichern</button>
               <button className="btn-sm" onClick={() => setEditFolderId(null)}>Abbrechen</button>
             </>) : (<>
-              <span style={{ flex: 1, fontSize: 14 }}>{f.name}</span>
+              <span className="folder-row-name">
+                <span className="folder-row-label">{f.name}</span>
+                {parent && <span className="folder-group-pill">Überordner · {kids} Ordner</span>}
+                {!parent && f.parentId && <span className="folder-parent-tag">{f.parentIcon || "📂"} {f.parentName}</span>}
+              </span>
+              {!parent && parentFolders.length > 0 && (
+                <div className="folder-assign">
+                  <span className="folder-assign-ico">📂</span>
+                  <select value={f.parentId || ""} onChange={(e) => assignParent(f.id, e.target.value || null)} title="Überordner zuweisen">
+                    <option value="">Keine Gruppe</option>
+                    {parentFolders.map((p) => <option key={p.id} value={p.id}>{p.icon} {p.name}</option>)}
+                  </select>
+                </div>
+              )}
+              <button className="btn-sm" title="Als PDF drucken" onClick={() => setPrintFolder(f)}>🖨️</button>
               <button className="btn-sm" onClick={() => { setEditFolderId(f.id); setEditFolderName(f.name); }}>Umbenennen</button>
               <button className="btn-sm danger" onClick={() => deleteFolder(f.id)}>Löschen</button>
             </>)}
           </div>
-        ))}
+          );
+        })}
       </div>}
     </div>)}
+
+    {printFolder && <PrintFolderModal folder={printFolder} folders={folders} onClose={() => setPrintFolder(null)} />}
 
     {manageSection === "words" && (
     <div className="manage-words-layout">
@@ -722,7 +821,7 @@ export function ManageTab({ session }) {
               else { setFolderId(v); setQuickFolder(null); }
             }} style={{ flex: "none", width: 160 }}>
               <option value="">📂 Kein Ordner</option>
-              {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+              {assignableFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
               <optgroup label="Neu">
                 <option value="__new__">+ Neuer Ordner</option>
               </optgroup>
@@ -829,7 +928,7 @@ export function ManageTab({ session }) {
             <div className="form-row" style={{ marginBottom: 10 }}>
               <select value={folderId} onChange={(e) => setFolderId(e.target.value)}>
                 <option value="">📂 Kein Ordner</option>
-                {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+                {assignableFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
               </select>
             </div>
             <textarea value={bulk} onChange={(e) => setBulk(e.target.value)} rows={5}
@@ -858,7 +957,7 @@ export function ManageTab({ session }) {
             </div>
             <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)} title="Nach Ordner filtern">
               <option value="all">Alle Ordner</option>
-              {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+              {folderFilterOptions(folders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
             <select value={onlyArticle ? "article" : "all"} onChange={(e) => setOnlyArticle(e.target.value === "article")}
               title="Nur Nomen mit erkanntem Artikel anzeigen (auf der geladenen Seite)">
@@ -878,7 +977,7 @@ export function ManageTab({ session }) {
                 <span className="bulk-count">{selectedWords.size} ausgewählt</span>
                 <select className="bulk-move" value="" onChange={(e) => { if (e.target.value) bulkMoveSelected(e.target.value); }}>
                   <option value="">📁 Verschieben…</option>
-                  {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+                  {assignableFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
                   <option value="">📂 Kein Ordner</option>
                 </select>
                 <div className="bulk-seg">
@@ -935,7 +1034,7 @@ export function ManageTab({ session }) {
                     <input placeholder="Beispielsatz (optional)" value={wEdit.example} maxLength={LIMIT.example} onChange={(e) => setWEdit({ ...wEdit, example: e.target.value })} />
                     <select value={wEdit.folderId} onChange={(e) => setWEdit({ ...wEdit, folderId: e.target.value })} style={{ flex: "none", width: 160 }}>
                       <option value="">📂 Kein Ordner</option>
-                      {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+                      {assignableFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
                     </select>
                   </div>
                   <div className="form-row">
@@ -967,7 +1066,7 @@ export function ManageTab({ session }) {
                   <div className="wi-meta">
                     <select className="folder-chip" value={w.folderId || ""} onChange={(e) => moveWord(w, e.target.value)} title="Ordner wechseln">
                       <option value="">📂 Kein Ordner</option>
-                      {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+                      {assignableFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
                     </select>
                     <div className="deck-chips">
                     <button

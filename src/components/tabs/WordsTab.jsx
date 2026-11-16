@@ -10,6 +10,7 @@ import {
   loadVisibleFolders, loadUserFolders, loadUserWords, loadProgress, cachePron,
   personalSearchFieldsReady, markPersonalSearchFieldsReady, healPersonalSearchFields,
 } from "../../data/loaders";
+import { folderFilterOptions, matchFolderValue, resolveFolderScope } from "../../lib/folders";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove, cacheUpdate, cacheGet, cacheSet } from "../../data/cache";
@@ -96,7 +97,7 @@ export function WordsTab({ session }) {
 
   const countOpts = (fid) => ({
     uid: session.uid, teacher: !!session.isTeacher,
-    folderId: !fid || fid === "all" ? null : fid,
+    ...resolveFolderScope(folders, fid),
   });
 
   async function liveCounts(fid, src = sourceFilter) {
@@ -131,6 +132,8 @@ export function WordsTab({ session }) {
   const countsMatch = (a, b) => a && b && a.g != null && a.p != null && a.g === b.g && a.p === b.p;
 
   function basePageState(over = {}, src = sourceFilter) {
+    const { folderValue, ...rest } = over;
+    const fv = folderValue !== undefined ? folderValue : filterFolder;
     let sources;
     if (legacyPersonal) sources = ["global"];
     else if (src === "all") sources = ["global", "personal"];
@@ -139,9 +142,9 @@ export function WordsTab({ session }) {
     return newPageState({
       uid: session.uid,
       teacher: !!session.isTeacher,
-      folderId: filterFolder === "all" ? null : filterFolder,
+      ...resolveFolderScope(folders, fv),
       sources,
-      ...over,
+      ...rest,
     });
   }
 
@@ -195,7 +198,7 @@ export function WordsTab({ session }) {
     setBusy(true);
     const next = await loadNextPage(basePageState(over, src));
     setPage(next); setPageIdx(0);
-    if (!over.q && !legacyPersonal) setCounts(await countsFor(over.folderId ?? filterFolder, next, src));
+    if (!over.q && !legacyPersonal) setCounts(await countsFor(over.folderValue ?? filterFolder, next, src));
     setBusy(false);
   }
 
@@ -234,7 +237,7 @@ export function WordsTab({ session }) {
         if (countsMatch(now, hit.counts)) { setPage(hit.state); setCounts(now); setPageIdx(0); return; }
       }
     }
-    reloadPage({ folderId: v === "all" ? null : v, q });
+    reloadPage({ folderValue: v, q });
   }
 
   async function onSourceFilterChange(v) {
@@ -249,7 +252,7 @@ export function WordsTab({ session }) {
         if (countsMatch(now, hit.counts)) { setPage(hit.state); setCounts(now); setPageIdx(0); return; }
       }
     }
-    reloadPage({ folderId: filterFolder === "all" ? null : filterFolder, q }, v);
+    reloadPage({ folderValue: filterFolder, q }, v);
   }
 
   async function autoTranslate() {
@@ -427,7 +430,7 @@ export function WordsTab({ session }) {
 
   const q = search.trim().toLowerCase();
   const legacyRows = (legacyPersonal || []).filter((w) => {
-    const mf = filterFolder === "all" || w.folderId === filterFolder;
+    const mf = matchFolderValue(folders, filterFolder, w.folderId);
     const ms = !q || (w.de || "").toLowerCase().startsWith(q);
     const msrc = sourceFilter === "all" || w.source === sourceFilter;
     return mf && ms && msrc;
@@ -491,7 +494,7 @@ export function WordsTab({ session }) {
       <input placeholder="🔍 Wörter suchen…" value={search} onChange={(e) => onSearchChange(e.target.value)} />
       <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)}>
         <option value="all">Alle Ordner</option>
-        {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+        {folderFilterOptions(folders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
       <select value={sourceFilter} onChange={(e) => onSourceFilterChange(e.target.value)}>
         <option value="all">Alle Wörter</option>

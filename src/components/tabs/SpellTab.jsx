@@ -8,6 +8,7 @@ import { loadSpellProgress, saveOneSpellProgress } from "../../data/spellProgres
 import {
   buildSpellCards, buildSpellDeck, analyzeSpelling, recordSpell, hasDescription, segChar,
 } from "../../lib/spell";
+import { folderFilterOptions, matchFolderValue } from "../../lib/folders";
 import { CardNav, useCardNavKeys } from "../CardNav";
 
 export function SpellTab({ session }) {
@@ -84,11 +85,6 @@ export function SpellTab({ session }) {
     return () => { cancelled = true; };
   }, [session.uid]);
 
-  async function onFolderChange(v) {
-    setFilterFolder(v);
-    await load({ folderId: v });
-  }
-
   async function onClassChange(v) {
     setFilterClass(v);
     setFilterFolder("");
@@ -96,18 +92,19 @@ export function SpellTab({ session }) {
     await load({ classId: v });
   }
 
-  function onTeacherFolderChange(v) {
-    setFilterFolder(v);
-    const subset = v ? cards.filter((c) => (c.folderId ?? null) === v) : cards;
-    setDeck(buildSpellDeck(subset));
-    resetCard(0);
-    setRound({ answered: 0, correct: 0 });
-  }
-
   const selectedClass = isTeacher ? classes.find((c) => c.id === filterClass) : null;
   const classFolders = selectedClass
     ? folders.filter((f) => (selectedClass.folders || []).some((e) => e && e.folderId === f.id))
     : [];
+  const filterFolders = isTeacher ? classFolders : folders;
+  const scopedCards = cards.filter((c) => matchFolderValue(filterFolders, filterFolder, c.folderId));
+
+  function applyFolder(v) {
+    setFilterFolder(v);
+    setDeck(buildSpellDeck(cards.filter((c) => matchFolderValue(filterFolders, v, c.folderId))));
+    resetCard(0);
+    setRound({ answered: 0, correct: 0 });
+  }
 
   const current = deck[idx] || null;
   const currentTrans = current ? (trans[current.id] ?? withTrans(current, session.lang).ru ?? "") : "";
@@ -157,7 +154,7 @@ export function SpellTab({ session }) {
   useCardNavKeys(goPrev, goNext, [idx, deck.length]);
 
   function restart() {
-    setDeck(buildSpellDeck(isTeacher && filterFolder ? cards.filter((c) => (c.folderId ?? null) === filterFolder) : cards));
+    setDeck(buildSpellDeck(scopedCards));
     resetCard(0);
     setRound({ answered: 0, correct: 0 });
   }
@@ -181,7 +178,7 @@ export function SpellTab({ session }) {
     {error && <p className="err" style={{ marginBottom: 10 }}>⚠ {error}</p>}
 
     <div className="stats-bar">
-      <div className="stat"><div className="stat-n">{cards.length}</div><div className="stat-l">Wörter</div></div>
+      <div className="stat"><div className="stat-n">{scopedCards.length}</div><div className="stat-l">Wörter</div></div>
       <div className="stat"><div className={`stat-n${round.answered > 0 ? " due" : ""}`}>{round.answered}</div><div className="stat-l">Geübt</div></div>
       <div className="stat"><div className="stat-n ok">{round.correct}</div><div className="stat-l">Richtig</div></div>
     </div>
@@ -193,17 +190,17 @@ export function SpellTab({ session }) {
           {classes.map((c) => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
         </select>
         {filterClass && classFolders.length > 0 && (
-          <select value={filterFolder} onChange={(e) => onTeacherFolderChange(e.target.value)}>
+          <select value={filterFolder} onChange={(e) => applyFolder(e.target.value)}>
             <option value="">📂 Alle Ordner</option>
-            {classFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+            {folderFilterOptions(classFolders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         )}
       </div>
     ) : folders.length > 0 && (
       <div className="filter-bar">
-        <select value={filterFolder} onChange={(e) => onFolderChange(e.target.value)}>
+        <select value={filterFolder} onChange={(e) => applyFolder(e.target.value)}>
           <option value="all">📂 Alle Ordner</option>
-          {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+          {folderFilterOptions(folders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </div>
     )}
@@ -220,7 +217,7 @@ export function SpellTab({ session }) {
         <h3>Kurs wählen</h3>
         <p style={{ fontSize: 14 }}>Wähle oben einen Kurs, um die Rechtschreibung seiner Wörter zu üben.</p>
       </div>
-    ) : cards.length === 0 ? (
+    ) : scopedCards.length === 0 ? (
       <div className="empty" style={{ padding: 40 }}>
         <div className="emoji">✍️</div>
         <h3>Noch keine Wörter</h3>

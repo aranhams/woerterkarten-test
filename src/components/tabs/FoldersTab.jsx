@@ -3,6 +3,7 @@ import { LIMIT, FOLDER_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { clip, validImageUrl, cldImg } from "../../lib/format";
 import { withTrans } from "../../lib/word";
 import { loadVisibleFolders, loadUserFolders } from "../../data/loaders";
+import { isParentFolder } from "../../lib/folders";
 import { newPageState, loadNextPage, countWords, ensureWindow, windowRows, canGoNext, pageCount } from "../../data/pagination";
 import { dbSet, dbDelete } from "../../data/db";
 import { cachePush, cacheRemove } from "../../data/cache";
@@ -76,7 +77,8 @@ export function FoldersTab({ session }) {
     } catch { alert("Löschen fehlgeschlagen."); }
   }
   const fq = folderSearch.trim().toLowerCase();
-  const filteredFolders = fq ? folders.filter((f) => (f.name || "").toLowerCase().includes(fq)) : folders;
+  const browsableFolders = folders.filter((f) => !isParentFolder(f));
+  const filteredFolders = fq ? browsableFolders.filter((f) => (f.name || "").toLowerCase().includes(fq)) : browsableFolders;
   const folderPages = Math.max(1, Math.ceil(filteredFolders.length / FOLDERS_PER_PAGE));
   const fPage = Math.min(folderPage, folderPages - 1);
   const pagedFolders = filteredFolders.slice(fPage * FOLDERS_PER_PAGE, fPage * FOLDERS_PER_PAGE + FOLDERS_PER_PAGE);

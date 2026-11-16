@@ -4,6 +4,7 @@ import { clip, validImageUrl, cldImg } from "../../lib/format";
 import { isDue, nextReview, lvlEmoji, effProgress, MASTERY_LEVEL, INTERVALS } from "../../lib/srs";
 import { withTrans } from "../../lib/word";
 import { isArticleWord, shuffle } from "../../lib/article";
+import { folderFilterOptions, matchFolderValue, resolveFolderScope, isParentValue, parentIdOf, childFolderIds } from "../../lib/folders";
 import { translateWord, getLearnQueue } from "../../lib/api";
 import {
   loadVisibleFolders, loadUserWords, loadUserFolders,
@@ -118,7 +119,8 @@ export function LearnTab({ session }) {
     setIdx(0); setRevealed(false);
     setLoading(true);
     try {
-      const r = await getLearnQueue({ folderId: fid === "all" ? null : fid });
+      const scope = resolveFolderScope(folders, fid);
+      const r = await getLearnQueue({ folderId: scope.folderId, folderIds: scope.folderIds });
       const uw = await loadUserWords(session.uid);
       setAllWords(shuffle([...r.dueWords, ...uw]));
       setStats(r.stats); setDelta({ due: 0, learned: 0 });
@@ -131,7 +133,8 @@ export function LearnTab({ session }) {
     if (session.isTeacher || fetching.current || !capped) return;
     fetching.current = true;
     try {
-      const r = await getLearnQueue({ folderId: filterFolder === "all" ? null : filterFolder });
+      const scope = resolveFolderScope(folders, filterFolder);
+      const r = await getLearnQueue({ folderId: scope.folderId, folderIds: scope.folderIds });
       setAllWords((prev) => {
         const have = new Set(prev.map((w) => w.id));
         return [...prev, ...shuffle(r.dueWords.filter((w) => !have.has(w.id)))];
@@ -153,7 +156,7 @@ export function LearnTab({ session }) {
   };
   const scoped = (allFolders
     ? allWords
-    : allWords.filter((w) => w.folderId === filterFolder)).filter(matchSource);
+    : allWords.filter((w) => matchFolderValue(folders, filterFolder, w.folderId))).filter(matchSource);
 
   const selectedClass = session.isTeacher ? classes.find((c) => c.id === filterClass) : null;
   const classFolders = selectedClass
@@ -164,12 +167,19 @@ export function LearnTab({ session }) {
   const dueCards = scoped.filter((w) => isDue(progressOf(w)));
   const isLearned = (w) => (progressOf(w)?.level || 0) >= MASTERY_LEVEL;
 
-  const gStats = stats && sourceFilter !== "personal" && sourceFilter !== "article"
-    ? (allFolders ? stats : (stats.perFolder && stats.perFolder[filterFolder]) || { total: 0, due: 0, learned: 0 })
-    : null;
+  const folderStats = (() => {
+    const pf = (stats && stats.perFolder) || {};
+    if (allFolders) return stats;
+    const ids = isParentValue(filterFolder) ? childFolderIds(folders, parentIdOf(filterFolder)) : [filterFolder];
+    return ids.reduce((acc, id) => {
+      const b = pf[id] || {};
+      return { total: acc.total + (b.total || 0), due: acc.due + (b.due || 0), learned: acc.learned + (b.learned || 0) };
+    }, { total: 0, due: 0, learned: 0 });
+  })();
+  const gStats = stats && sourceFilter !== "personal" && sourceFilter !== "article" ? folderStats : null;
   const personal = sourceFilter === "global" || sourceFilter === "article"
     ? []
-    : allWords.filter((w) => w.source !== "global" && (allFolders || w.folderId === filterFolder));
+    : allWords.filter((w) => w.source !== "global" && (allFolders || matchFolderValue(folders, filterFolder, w.folderId)));
 
   const total = gStats ? gStats.total + personal.length : scoped.length;
   const learned = gStats
@@ -326,13 +336,13 @@ export function LearnTab({ session }) {
       {filterClass && classFolders.length > 0 && (
         <select value={filterFolder} onChange={(e) => { setFilterFolder(e.target.value); setIdx(0); setRevealed(false); }}>
           <option value="">📂 Alle Ordner</option>
-          {classFolders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+          {folderFilterOptions(classFolders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       )}
     </div>) : (folders.length > 0 && <div className="filter-bar">
       <select value={filterFolder} onChange={(e) => switchStudentFolder(e.target.value)}>
         <option value="all">📂 Alle Ordner</option>
-        {folders.map((f) => <option key={f.id} value={f.id}>{f.icon} {f.name}</option>)}
+        {folderFilterOptions(folders).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
       <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setIdx(0); setRevealed(false); }}>
         <option value="all">Alle Wörter</option>

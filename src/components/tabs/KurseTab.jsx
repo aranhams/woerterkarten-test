@@ -3,6 +3,7 @@ import { LIMIT, CLASS_ICONS, WORD_PAGE_SERVER } from "../../lib/constants";
 import { classSync, startRepeat, removeRepeat } from "../../lib/api";
 import { listLiveRepeats } from "../../../shared/repeat.js";
 import { loadAllClasses, loadGlobalFolders } from "../../data/loaders";
+import { isParentFolder } from "../../lib/folders";
 import { clearDataCache } from "../../data/cache";
 import { newPageState, loadNextPage, searchState, ensureWindow, windowRows, canGoNext } from "../../data/pagination";
 
@@ -393,8 +394,8 @@ export function KurseTab({ session }) {
 
       <div className="add-form">
         <div className="sec-label" style={{ marginTop: 0 }}>Ordner im Kurs</div>
-        {folders.length === 0 && <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keine Kurs-Ordner. Erstelle welche im Tab „Verwalten".</p>}
-        {folders.map((f) => {
+        {folders.filter((f) => !isParentFolder(f)).length === 0 && <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keine Kurs-Ordner. Erstelle welche im Tab „Verwalten".</p>}
+        {folders.filter((f) => !isParentFolder(f)).map((f) => {
           const state = folderState(f.id);
           const entry = (selected.folders || []).find((x) => x.folderId === f.id);
           return (
